@@ -7,19 +7,48 @@ const { Schema, Types } = mongoose;
 
 const addressSchema = new Schema({
   label: { type: String, enum: ['home', 'office', 'other'], default: 'home' },
-  line1: { type: String, required: true },
-  line2: { type: String },
-  city: { type: String, required: true },
-  pincode: { type: String, required: true },
-  state: { type: String, required: true },
+  line1: { type: String, required: true, trim: true, maxlength: 255 },
+  line2: { type: String, trim: true, maxlength: 255 },
+  city: { type: String, required: true, trim: true, maxlength: 100 },
+  pincode: { type: String, required: true, trim: true, maxlength: 10 },
+  state: { type: String, required: true, trim: true, maxlength: 100 },
   isDefault: { type: Boolean, default: false },
 }, { _id: true });
 
 const customerSchema = new Schema({
   firebaseUID: { type: String, sparse: true, index: true },
-  phone: { type: String, required: true, unique: true, index: true },
-  name: { type: String, default: '' },
-  email: { type: String, default: '' },
+
+  // Enhanced fields based on previous model
+  phoneNumber: {
+    type: String,
+    trim: true,
+    minlength: [10, 'Phone number must be at least 10 digits'],
+    maxlength: [15, 'Phone number cannot exceed 15 digits'],
+  },
+  name: {
+    type: String,
+    default: '',
+    trim: true,
+    maxlength: [255, 'Name cannot exceed 255 characters'],
+  },
+  address: { type: String, default: '', trim: true },
+  city: { type: String, default: '', trim: true, maxlength: [100, 'City cannot exceed 100 characters'] },
+  state: { type: String, default: '', trim: true, maxlength: [100, 'State cannot exceed 100 characters'] },
+  emailId: { type: String, default: '', lowercase: true, trim: true, maxlength: [200, 'Email cannot exceed 200 characters'] },
+  coordinates: {
+    latitude: { type: Number, default: null },
+    longitude: { type: Number, default: null },
+  },
+  pincode: { type: String, default: '', trim: true, maxlength: [10, 'Pincode cannot exceed 10 characters'] },
+  createdOn: { type: Date, default: Date.now },
+  modifyOn: { type: Date, default: null },
+  isActive: { type: Boolean, default: true },
+  accountStatus: {
+    type: String,
+    enum: ['active', 'inactive', 'blocked'],
+    default: 'active',
+  },
+
   profilePhoto: { type: String, default: '' },        // Cloudinary URL
   walletBalance: { type: Number, default: 0 },
   referralCode: { type: String, unique: true, sparse: true },
@@ -27,10 +56,17 @@ const customerSchema = new Schema({
   addresses: { type: [addressSchema], default: [] },  // max 5 enforced in route
 }, { timestamps: true });
 
-// Generate a short referral code before first save
 customerSchema.pre('save', function (next) {
+  if (!this.phoneNumber) this.phoneNumber = '';
+  if (!this.emailId) this.emailId = '';
+
+  // Update modifyOn only when document is changed and not new (old-model behavior)
+  if (this.isModified() && !this.isNew) {
+    this.modifyOn = Date.now();
+  }
+
   if (!this.referralCode) {
-    this.referralCode = this.phone.slice(-4) +
+    this.referralCode = this.phoneNumber.slice(-4) +
       Math.random().toString(36).substring(2, 6).toUpperCase();
   }
   next();

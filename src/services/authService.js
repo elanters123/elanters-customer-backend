@@ -61,9 +61,9 @@ const verifyCustomerOTP = async (phone, otp) => {
   await CustomerOTP.deleteMany({ phone });
 
   // Upsert customer — first login creates the record
-  let customer = await Customer.findOne({ phone });
+  let customer = await Customer.findOne({ phoneNumber: phone });
   const isNewUser = !customer;
-  if (!customer) customer = await Customer.create({ phone });
+  if (!customer) customer = await Customer.create({ phoneNumber: phone });
 
   const token = signToken(customer._id);
   const refreshToken = signRefreshToken(customer._id);

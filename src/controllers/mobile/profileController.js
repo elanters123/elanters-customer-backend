@@ -17,10 +17,14 @@ const getProfile = async (req, res) => {
 
 const updateProfile = async (req, res) => {
   try {
-    const { name, email, profilePhoto } = req.body;
+    const { name, emailId, profilePhoto, accountStatus } = req.body;
     const updates = {};
     if (name !== undefined) updates.name = name;
-    if (email !== undefined) updates.email = email;
+    if (emailId !== undefined) updates.emailId = emailId;
+    if (accountStatus !== undefined) {
+      updates.accountStatus = accountStatus;
+      updates.isActive = accountStatus === 'active';
+    }
     if (profilePhoto !== undefined) updates.profilePhoto = profilePhoto;
 
     const customer = await Customer.findByIdAndUpdate(

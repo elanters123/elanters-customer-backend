@@ -30,9 +30,9 @@ const verifyOTP = async (req, res) => {
       refreshToken,
       customer: {
         id: customer._id,
-        phone: customer.phone,
+        phoneNumber: customer.phoneNumber,
         name: customer.name,
-        email: customer.email,
+        emailId: customer.emailId,
         profilePhoto: customer.profilePhoto,
         walletBalance: customer.walletBalance,
         referralCode: customer.referralCode,

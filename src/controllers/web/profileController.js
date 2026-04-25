@@ -1,6 +1,28 @@
 // controllers/web/profileController.js
 const Customer = require('../../models/Customer');
 
+function syncAddressList(customer) {
+  // no-op: single source of truth is customer.addresses
+}
+
+function applySelectedAddressToRoot(customer) {
+  const addresses = customer.addresses || [];
+  const def = addresses.find((a) => a.isDefault);
+  const selected = def || addresses[0] || null;
+
+  if (!selected) {
+    customer.address = '';
+    customer.city = '';
+    customer.state = '';
+    customer.pincode = '';
+    return;
+  }
+  customer.address = [selected.line1, selected.line2].filter(Boolean).join(', ');
+  customer.city = selected.city || '';
+  customer.state = selected.state || '';
+  customer.pincode = selected.pincode || '';
+}
+
 const getProfile = async (req, res) => {
   try {
     const customer = await Customer.findById(req.customerId).select('-__v');
@@ -13,10 +35,14 @@ const getProfile = async (req, res) => {
 
 const updateProfile = async (req, res) => {
   try {
-    const { name, email, profilePhoto } = req.body;
+    const { name, emailId, profilePhoto, accountStatus } = req.body;
     const updates = {};
     if (name !== undefined) updates.name = name;
-    if (email !== undefined) updates.email = email;
+    if (emailId !== undefined) updates.emailId = emailId;
+    if (accountStatus !== undefined) {
+      updates.accountStatus = accountStatus;
+      updates.isActive = accountStatus === 'active';
+    }
     if (profilePhoto !== undefined) updates.profilePhoto = profilePhoto;
 
     const customer = await Customer.findByIdAndUpdate(
@@ -36,7 +62,10 @@ const updateProfile = async (req, res) => {
 const getAddresses = async (req, res) => {
   try {
     const customer = await Customer.findById(req.customerId).select('addresses');
-    res.json({ success: true, addresses: customer?.addresses || [] });
+    res.json({
+      success: true,
+      addresses: customer?.addresses || [],
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -49,9 +78,22 @@ const addAddress = async (req, res) => {
     if (customer.addresses.length >= 5)
       return res.status(400).json({ success: false, message: 'Maximum 5 addresses allowed' });
 
+    const isDefault = Boolean(req.body?.isDefault);
+    if (isDefault) {
+      customer.addresses.forEach((a) => { a.isDefault = false; });
+    }
     customer.addresses.push(req.body);
+    if (!customer.addresses.some((a) => a.isDefault)) {
+      const first = customer.addresses[0];
+      if (first) first.isDefault = true;
+    }
+    syncAddressList(customer);
+    applySelectedAddressToRoot(customer);
     await customer.save();
-    res.status(201).json({ success: true, addresses: customer.addresses });
+    res.status(201).json({
+      success: true,
+      addresses: customer.addresses,
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -65,9 +107,20 @@ const updateAddress = async (req, res) => {
     const address = customer.addresses.id(req.params.addressId);
     if (!address) return res.status(404).json({ success: false, message: 'Address not found' });
 
+    if (req.body?.isDefault) {
+      customer.addresses.forEach((a) => { a.isDefault = false; });
+    }
     Object.assign(address, req.body);
+    if (!customer.addresses.some((a) => a.isDefault)) {
+      address.isDefault = true;
+    }
+    syncAddressList(customer);
+    applySelectedAddressToRoot(customer);
     await customer.save();
-    res.json({ success: true, addresses: customer.addresses });
+    res.json({
+      success: true,
+      addresses: customer.addresses,
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -78,9 +131,19 @@ const deleteAddress = async (req, res) => {
     const customer = await Customer.findById(req.customerId);
     if (!customer) return res.status(404).json({ success: false, message: 'Customer not found' });
 
-    customer.addresses.pull({ _id: req.params.addressId });
+    const toDeleteId = req.params.addressId;
+    customer.addresses.pull({ _id: toDeleteId });
+    if (!customer.addresses.some((a) => a.isDefault)) {
+      const first = customer.addresses[0];
+      if (first) first.isDefault = true;
+    }
+    syncAddressList(customer);
+    applySelectedAddressToRoot(customer);
     await customer.save();
-    res.json({ success: true, addresses: customer.addresses });
+    res.json({
+      success: true,
+      addresses: customer.addresses,
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
