@@ -1,22 +1,25 @@
 // controllers/web/orderController.js
-const CustomerOrder = require('../../models/CustomerOrder');
 const CustomerCart = require('../../models/CustomerCart');
 const Item = require('../../models/Item');
+const Booking = require('../../models/Booking');
 const { createRazorpayInstance } = require('../../config/razorpay');
 
 const getOrders = async (req, res) => {
   try {
     const { page = 1, limit = 10, status } = req.query;
-    const query = { customerId: req.customerId };
+    const query = { 'customer.id': req.customerId, serviceType: 'gardening' };
     if (status) query.status = status;
 
-    const orders = await CustomerOrder.find(query)
+    const bookings = await Booking.find(query)
       .sort({ createdAt: -1 })
       .skip((page - 1) * limit)
       .limit(Number(limit))
       .select('-__v');
 
-    const total = await CustomerOrder.countDocuments(query);
+    const total = await Booking.countDocuments(query);
+
+    // Map booking fields to the order shape the frontend expects
+    const orders = bookings.map(bookingToOrder);
     res.json({ success: true, orders, total, page: Number(page), limit: Number(limit) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -25,16 +28,53 @@ const getOrders = async (req, res) => {
 
 const getOrderById = async (req, res) => {
   try {
-    const order = await CustomerOrder.findOne({
+    const booking = await Booking.findOne({
       _id: req.params.id,
-      customerId: req.customerId,
+      'customer.id': req.customerId,
     }).select('-__v');
-    if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
-    res.json({ success: true, order });
+    if (!booking) return res.status(404).json({ success: false, message: 'Order not found' });
+    res.json({ success: true, order: bookingToOrder(booking) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+/** Map a Booking document to the CustomerOrder shape the frontend uses. */
+function bookingToOrder(b) {
+  return {
+    _id: b._id,
+    customerId: b.customer?.id,
+    items: (b.materials || []).map((m) => ({
+      productId: m.id || m._id || null,
+      name: m.name,
+      price: m.price,
+      quantity: m.quantity,
+    })),
+    deliveryAddress: {
+      fullName: b.customer?.name || '',
+      phone: b.customer?.phone || '',
+      email: b.customer?.email || '',
+      line1: b.location?.address || '',
+      city: b.location?.city || '',
+      state: b.location?.state || '',
+      pincode: b.location?.postalCode || '',
+    },
+    subtotal: (b.payment?.totalAmount || 0) - 0,
+    deliveryFee: 0,
+    total: b.payment?.totalAmount || 0,
+    couponCode: b.coupon?.code || null,
+    walletCreditsUsed: 0,
+    paymentMethod: b.payment?.method || 'cod',
+    paymentStatus: b.payment?.status || 'pending',
+    status: b.status,
+    eOrderId: b.eOrderId || null,
+    description: b.description,
+    scheduledDate: b.scheduledDateTime?.date,
+    timeSlot: b.scheduledDateTime?.timeSlot,
+    createdAt: b.createdAt,
+    updatedAt: b.updatedAt,
+  };
+}
 
 const createOrder = async (req, res) => {
   try {
@@ -52,7 +92,6 @@ const createOrder = async (req, res) => {
         : product.price;
       subtotal += effectivePrice * item.quantity;
       enrichedItems.push({
-        productId: item.productId,
         name: product.name,
         price: effectivePrice,
         quantity: item.quantity,
@@ -62,41 +101,68 @@ const createOrder = async (req, res) => {
     const deliveryFee = subtotal >= 500 ? 0 : 49;
     const total = subtotal + deliveryFee - walletCreditsUsed;
 
-    // COD orders don't need a payment gateway — create directly.
-    // Online payments go through Razorpay.
+    // Online payments go through Razorpay; COD skips it
     let razorpayOrderId = null;
     let razorpayAmount = null;
-
     if (paymentMethod !== 'cod') {
       const razorpay = createRazorpayInstance();
-      const razorpayOrder = await razorpay.orders.create({
+      const rzpOrder = await razorpay.orders.create({
         amount: Math.round(total * 100),
         currency: 'INR',
         receipt: `order_${Date.now()}`,
       });
-      razorpayOrderId = razorpayOrder.id;
-      razorpayAmount = razorpayOrder.amount;
+      razorpayOrderId = rzpOrder.id;
+      razorpayAmount = rzpOrder.amount;
     }
 
-    const order = await CustomerOrder.create({
-      customerId: req.customerId,
-      items: enrichedItems,
-      deliveryAddress,
-      subtotal,
-      deliveryFee,
-      total,
-      couponCode: couponCode || null,
-      walletCreditsUsed,
-      paymentMethod,
-      ...(razorpayOrderId ? { razorpayOrderId } : {}),
-      // COD orders are confirmed immediately; online orders wait for payment
-      status: paymentMethod === 'cod' ? 'confirmed' : 'pending',
-      paymentStatus: paymentMethod === 'cod' ? 'pending' : 'pending',
+    // Default delivery slot: 2 days from now
+    const deliveryDate = new Date();
+    deliveryDate.setDate(deliveryDate.getDate() + 2);
+    deliveryDate.setHours(0, 0, 0, 0);
+
+    const booking = await Booking.create({
+      serviceType: 'gardening',
+      description: `Plant delivery — ${enrichedItems.length} item${enrichedItems.length > 1 ? 's' : ''}`,
+      status: paymentMethod === 'cod' ? 'upcoming' : 'upcoming',
+      customer: {
+        id: req.customerId,
+        name: deliveryAddress.fullName || '',
+        phone: deliveryAddress.phone || '',
+        email: deliveryAddress.email || '',
+      },
+      scheduledDateTime: {
+        date: deliveryDate,
+        timeSlot: '9am-12pm',
+      },
+      location: {
+        address: deliveryAddress.line1,
+        city: deliveryAddress.city,
+        state: deliveryAddress.state,
+        postalCode: deliveryAddress.pincode,
+        coordinates: { latitude: 0, longitude: 0 },
+      },
+      materials: enrichedItems,
+      payment: {
+        totalAmount: total,
+        status: 'pending',
+        method: paymentMethod,
+        prePaidAmount: 0,
+      },
+      coupon: {
+        code: couponCode || null,
+        discountAmount: 0,
+      },
+      assignee: { type: 'admin', gardenerRef: null },
+      history: {
+        createdAt: new Date(),
+        lastModifiedAt: new Date(),
+      },
+      ...(razorpayOrderId ? { eOrderId: razorpayOrderId } : {}),
     });
 
     res.status(201).json({
       success: true,
-      order,
+      order: bookingToOrder(booking),
       ...(razorpayOrderId ? {
         razorpayOrderId,
         razorpayKeyId: process.env.RAZORPAY_KEY_ID,
@@ -121,25 +187,28 @@ const confirmPayment = async (req, res) => {
     if (expected !== razorpaySignature)
       return res.status(400).json({ success: false, message: 'Payment verification failed' });
 
-    const order = await CustomerOrder.findOneAndUpdate(
-      { razorpayOrderId, customerId: req.customerId },
+    const booking = await Booking.findOneAndUpdate(
+      { eOrderId: razorpayOrderId, 'customer.id': req.customerId },
       {
         $set: {
-          razorpayPaymentId,
-          razorpaySignature,
-          paymentStatus: 'paid',
-          status: 'confirmed',
+          'payment.transactionId': razorpayPaymentId,
+          'payment.status': 'paid',
+          status: 'upcoming',
+          'history.lastModifiedAt': new Date(),
         },
       },
       { new: true }
     );
 
-    if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
+    if (!booking) return res.status(404).json({ success: false, message: 'Order not found' });
 
-    // Clear cart after successful order
-    await CustomerCart.findOneAndUpdate({ customerId: req.customerId }, { $set: { items: [], couponCode: null } });
+    // Clear cart after successful payment
+    await CustomerCart.findOneAndUpdate(
+      { customerId: req.customerId },
+      { $set: { items: [], couponCode: null } }
+    );
 
-    res.json({ success: true, order });
+    res.json({ success: true, order: bookingToOrder(booking) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
