@@ -2,6 +2,7 @@
 const CustomerCart = require('../../models/CustomerCart');
 const Item = require('../../models/Item');
 const Booking = require('../../models/Booking');
+require('../../models/Gardener');
 const { createRazorpayInstance } = require('../../config/razorpay');
 
 const getOrders = async (req, res) => {
@@ -11,6 +12,7 @@ const getOrders = async (req, res) => {
     if (status) query.status = status;
 
     const bookings = await Booking.find(query)
+      .populate('assignee.gardenerRef', 'name phone')
       .sort({ createdAt: -1 })
       .skip((page - 1) * limit)
       .limit(Number(limit))
@@ -31,7 +33,9 @@ const getOrderById = async (req, res) => {
     const booking = await Booking.findOne({
       _id: req.params.id,
       'customer.id': req.customerId,
-    }).select('-__v');
+    })
+      .populate('assignee.gardenerRef', 'name phone')
+      .select('-__v');
     if (!booking) return res.status(404).json({ success: false, message: 'Order not found' });
     res.json({ success: true, order: bookingToOrder(booking) });
   } catch (error) {
@@ -67,6 +71,13 @@ function bookingToOrder(b) {
     paymentMethod: b.payment?.method || 'cod',
     paymentStatus: b.payment?.status || 'pending',
     status: b.status,
+    gardener: b.assignee?.gardenerRef
+      ? {
+          id: b.assignee.gardenerRef._id || null,
+          name: b.assignee.gardenerRef.name || null,
+          phone: b.assignee.gardenerRef.phone || null,
+        }
+      : null,
     eOrderId: b.eOrderId || null,
     description: b.description,
     scheduledDate: b.scheduledDateTime?.date,
