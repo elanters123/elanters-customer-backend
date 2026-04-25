@@ -12,6 +12,10 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3050;
 
+// Trust nginx reverse proxy — required for express-rate-limit to correctly
+// identify client IPs from the X-Forwarded-For header set by nginx.
+app.set('trust proxy', 1);
+
 // ─── Service prefix ───────────────────────────────────────────────────────────
 // All routes are mounted under /<SERVICE_PREFIX>/api/...
 // Default: "customer" → /customer/api/mobile/... /customer/api/web/...
