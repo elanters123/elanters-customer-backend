@@ -13,98 +13,75 @@ const otpRequested = require("../models/otpRequested.js");
 
 async function addBooking(bookingData) {
   try {
-    // Only validate fields explicitly required by the schema
-    const requiredFields = [
-      "customer",
-      "serviceType",
-      "description",
-      "scheduledDateTime",
-    ];
-    for (let field of requiredFields) {
+    // Required top-level fields
+    const requiredFields = ["customer", "serviceType", "description", "scheduledDateTime", "location", "payment"];
+    for (const field of requiredFields) {
       if (!bookingData[field]) throw new Error(`${field} is required`);
     }
 
-    // Ensure nested required fields are present
-    if (
-      !bookingData.customer.id ||
-      !bookingData.customer.name ||
-      !bookingData.customer.phone ||
-      !bookingData.customer.email
-    ) {
-      throw new Error(
-        "All customer fields (id, name, phone, email) are required"
-      );
-    }
-    if (
-      !bookingData.scheduledDateTime.start ||
-      !bookingData.scheduledDateTime.end
-    ) {
-      throw new Error(
-        "scheduledDateTime.start and scheduledDateTime.end are required"
-      );
-    }
-    if (
-      !bookingData.payment ||
-      !bookingData.payment.totalAmount ||
-      bookingData.payment.totalAmount === 0
-    ) {
-      throw new Error(
-        "payment.totalAmount is required and must be greater than 0"
-      );
-    }
-    if (
-      !bookingData.location ||
-      !bookingData.location.address ||
-      !bookingData.location.city ||
-      !bookingData.location.state ||
-      !bookingData.location.postalCode ||
-      !bookingData.location.coordinates ||
-      !bookingData.location.coordinates.latitude ||
-      !bookingData.location.coordinates.longitude
-    ) {
-      throw new Error(
-        "All location fields (address, city, state, postalCode, coordinates.latitude, coordinates.longitude) are required"
-      );
+    // Customer fields (id is injected by the controller from JWT)
+    const { id, name, phone, email } = bookingData.customer;
+    if (!name || !phone || !email) {
+      throw new Error("customer.name, customer.phone and customer.email are required");
     }
 
-    if (bookingData.assignee?.gardenerRef) {
-      bookingData.assignee.gardenerRef = mongoose.Types.ObjectId(
-        bookingData.assignee.gardenerRef
-      );
+    // scheduledDateTime must use { date, timeSlot } — matching the Mongoose schema
+    const { date, timeSlot } = bookingData.scheduledDateTime;
+    if (!date) throw new Error("scheduledDateTime.date is required");
+    if (!timeSlot) throw new Error("scheduledDateTime.timeSlot is required (9am-12pm | 12pm-3pm | 3pm-6pm | 6pm-9pm)");
+
+    // payment.totalAmount
+    if (!bookingData.payment.totalAmount || bookingData.payment.totalAmount === 0) {
+      throw new Error("payment.totalAmount is required and must be greater than 0");
     }
+
+    // location — coordinates.latitude/longitude can be 0 (use explicit undefined check)
+    const loc = bookingData.location;
+    if (!loc.address || !loc.city || !loc.state || !loc.postalCode) {
+      throw new Error("location.address, city, state and postalCode are required");
+    }
+    if (!loc.coordinates ||
+        loc.coordinates.latitude === undefined ||
+        loc.coordinates.longitude === undefined) {
+      throw new Error("location.coordinates.latitude and longitude are required (use 0 if unknown)");
+    }
+
+    // materials — normalise incoming array
+    const materials = (bookingData.materials || []).map((item) => ({
+      name: item.name || "Unknown",
+      price: item.price || 0,
+      quantity: item.quantity || 1,
+      unit: item.unit || "unit",
+    }));
+
     const newBooking = new Booking({
-      customer: {
-        id: bookingData.customer.id,
-        name: bookingData.customer.name,
-        phone: bookingData.customer.phone,
-        email: bookingData.customer.email,
-      },
       serviceType: bookingData.serviceType,
       description: bookingData.description,
-      status: bookingData.statusName || "Upcoming",
-      scheduledDateTime: {
-        start: bookingData.scheduledDateTime.start,
-        end: bookingData.scheduledDateTime.end,
-      },
-      bookingDate: bookingData.bookingDate || new Date(),
+      status: "upcoming",
+      eOrderId: bookingData.eOrderId || undefined,
+      customer: { id, name, phone, email },
+      scheduledDateTime: { date: new Date(date), timeSlot },
+      bookingDate: new Date(),
       location: {
-        address: bookingData.location.address,
-        city: bookingData.location.city,
-        state: bookingData.location.state,
-        postalCode: bookingData.location.postalCode,
+        address: loc.address,
+        city: loc.city,
+        state: loc.state,
+        postalCode: loc.postalCode,
         coordinates: {
-          latitude: bookingData.location.coordinates.latitude,
-          longitude: bookingData.location.coordinates.longitude,
+          latitude: loc.coordinates.latitude,
+          longitude: loc.coordinates.longitude,
         },
       },
+      materials,
       payment: {
         totalAmount: bookingData.payment.totalAmount,
-        companyShare: bookingData.payment.companyShare,
-        gardenerShare: bookingData.payment.gardenerShare,
-        status: bookingData.payment.status || "pending",
+        status: "pending",
+        prePaidAmount: bookingData.payment.prePaidAmount || 0,
       },
+      assignee: { type: "admin", gardenerRef: null },
       history: {
-        lastModifiedBy: bookingData.userID, // Assuming userID from JWT
+        createdAt: new Date(),
+        lastModifiedAt: new Date(),
       },
     });
 

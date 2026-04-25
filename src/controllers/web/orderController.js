@@ -43,10 +43,20 @@ const createOrder = async (req, res) => {
       return res.status(400).json({ success: false, message: 'items, deliveryAddress and paymentMethod are required' });
 
     let subtotal = 0;
+    const enrichedItems = [];
     for (const item of items) {
       const product = await Item.findById(item.productId);
       if (!product) return res.status(404).json({ success: false, message: `Product ${item.productId} not found` });
-      subtotal += product.price * item.quantity;
+      const effectivePrice = product.offer > 0
+        ? Math.round(product.price * (1 - product.offer / 100))
+        : product.price;
+      subtotal += effectivePrice * item.quantity;
+      enrichedItems.push({
+        productId: item.productId,
+        name: product.name,
+        price: effectivePrice,
+        quantity: item.quantity,
+      });
     }
 
     const deliveryFee = subtotal >= 500 ? 0 : 49;
@@ -70,7 +80,7 @@ const createOrder = async (req, res) => {
 
     const order = await CustomerOrder.create({
       customerId: req.customerId,
-      items,
+      items: enrichedItems,
       deliveryAddress,
       subtotal,
       deliveryFee,
