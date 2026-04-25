@@ -52,12 +52,21 @@ const createOrder = async (req, res) => {
     const deliveryFee = subtotal >= 500 ? 0 : 49;
     const total = subtotal + deliveryFee - walletCreditsUsed;
 
-    const razorpay = createRazorpayInstance();
-    const razorpayOrder = await razorpay.orders.create({
-      amount: Math.round(total * 100),
-      currency: 'INR',
-      receipt: `order_${Date.now()}`,
-    });
+    // COD orders don't need a payment gateway — create directly.
+    // Online payments go through Razorpay.
+    let razorpayOrderId = null;
+    let razorpayAmount = null;
+
+    if (paymentMethod !== 'cod') {
+      const razorpay = createRazorpayInstance();
+      const razorpayOrder = await razorpay.orders.create({
+        amount: Math.round(total * 100),
+        currency: 'INR',
+        receipt: `order_${Date.now()}`,
+      });
+      razorpayOrderId = razorpayOrder.id;
+      razorpayAmount = razorpayOrder.amount;
+    }
 
     const order = await CustomerOrder.create({
       customerId: req.customerId,
@@ -69,15 +78,20 @@ const createOrder = async (req, res) => {
       couponCode: couponCode || null,
       walletCreditsUsed,
       paymentMethod,
-      razorpayOrderId: razorpayOrder.id,
+      ...(razorpayOrderId ? { razorpayOrderId } : {}),
+      // COD orders are confirmed immediately; online orders wait for payment
+      status: paymentMethod === 'cod' ? 'confirmed' : 'pending',
+      paymentStatus: paymentMethod === 'cod' ? 'pending' : 'pending',
     });
 
     res.status(201).json({
       success: true,
       order,
-      razorpayOrderId: razorpayOrder.id,
-      razorpayKeyId: process.env.RAZ_ID,
-      amount: razorpayOrder.amount,
+      ...(razorpayOrderId ? {
+        razorpayOrderId,
+        razorpayKeyId: process.env.RAZORPAY_KEY_ID,
+        amount: razorpayAmount,
+      } : {}),
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -90,7 +104,7 @@ const confirmPayment = async (req, res) => {
     const { razorpayOrderId, razorpayPaymentId, razorpaySignature } = req.body;
     const crypto = require('crypto');
     const expected = crypto
-      .createHmac('sha256', process.env.RAZ_SECRET)
+      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
       .update(`${razorpayOrderId}|${razorpayPaymentId}`)
       .digest('hex');
 
