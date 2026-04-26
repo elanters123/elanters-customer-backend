@@ -4,9 +4,37 @@ const bookingService = require('../../services/bookingService');
 const Booking = require('../../models/Booking');
 const Coupon = require('../../models/Coupon');
 
+function normalizeCreateBookingBody(body, customerId) {
+  const d = body.deliveryAddress;
+  if (!d || body.location) {
+    return { ...body, customer: { ...(body.customer || {}), id: customerId } };
+  }
+  const customer = {
+    id: customerId,
+    name: d.fullName || body.customer?.name || '',
+    phone: d.phone || body.customer?.phone || '',
+    email: d.email || body.customer?.email || '',
+  };
+  const location = {
+    address: d.line1 || '',
+    city: d.city || '',
+    state: d.state || '',
+    postalCode: d.pincode || '',
+    coordinates: d.coordinates || { latitude: 0, longitude: 0 },
+  };
+  const payment = {
+    ...(body.payment || {}),
+    ...(body.paymentMethod && !(body.payment && body.payment.method)
+      ? { method: body.paymentMethod }
+      : {}),
+  };
+  const { deliveryAddress, paymentMethod, ...rest } = body;
+  return { ...rest, customer, location, payment };
+}
+
 const createBooking = async (req, res) => {
   try {
-    const bookingData = { ...req.body, customer: { ...req.body.customer, id: req.customerId } };
+    const bookingData = normalizeCreateBookingBody(req.body, req.customerId);
     const booking = await bookingService.addBooking(bookingData);
     res.status(201).json({ success: true, booking });
   } catch (error) {

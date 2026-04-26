@@ -1,5 +1,6 @@
 // bookingService.js
 const Booking = require("../models/Booking.js");
+const Item = require("../models/Item.js");
 // Not needed in customer-service (gardener-only models)
 // const OTPVerification = require("../models/OTPverification.js");
 // const Service = require("../models/Service.js");
@@ -9,14 +10,64 @@ const mongoose = require("mongoose");
 var unirest = require("unirest");
 const  sendOTP  = require('./otpService.js');
 const otpRequested = require("../models/otpRequested.js");
+const { expandGardenerBooking } = require("./gardenerBookingExpand.js");
 
+/**
+ * Resolve cart lines to booking materials using live Item prices (same rules as web createOrder).
+ * Each line: { productId, quantity }
+ */
+async function buildMaterialsFromLineItems(items) {
+  if (!Array.isArray(items) || items.length === 0) {
+    throw new Error("items must be a non-empty array of { productId, quantity }");
+  }
+  let subtotal = 0;
+  const materials = [];
+  for (const line of items) {
+    if (!line.productId) throw new Error("Each item must include productId");
+    const product = await Item.findById(line.productId);
+    if (!product) throw new Error(`Product ${line.productId} not found`);
+    const qty = Math.max(1, Number(line.quantity) || 1);
+    const effectivePrice =
+      product.offer > 0 ? Math.round(product.price * (1 - product.offer / 100)) : product.price;
+    subtotal += effectivePrice * qty;
+    materials.push({
+      id: product._id,
+      name: product.name,
+      price: effectivePrice,
+      quantity: qty,
+      unit: product.unit || "unit",
+    });
+  }
+  return { materials, subtotal };
+}
 
 async function addBooking(bookingData) {
   try {
-    // Required top-level fields
-    const requiredFields = ["customer", "serviceType", "description", "scheduledDateTime", "location", "payment"];
+    if (bookingData.gardener && typeof bookingData.gardener === "object") {
+      const expanded = expandGardenerBooking(bookingData.gardener);
+      const topNotes = bookingData.notes ? String(bookingData.notes).trim() : "";
+      const exNotes = expanded.notes ? String(expanded.notes).trim() : "";
+      delete bookingData.gardener;
+      Object.assign(bookingData, {
+        items: expanded.items,
+        scheduledDateTime: expanded.scheduledDateTime,
+        serviceType: expanded.serviceType,
+        description: expanded.description,
+      });
+      const merged = [topNotes, exNotes].filter(Boolean).join("\n");
+      if (merged) bookingData.notes = merged;
+    }
+
+    const hasLineItems =
+      Array.isArray(bookingData.items) && bookingData.items.length > 0;
+
+    // Required top-level fields (description optional when expanding from items)
+    const requiredFields = ["customer", "serviceType", "scheduledDateTime", "location", "payment"];
     for (const field of requiredFields) {
       if (!bookingData[field]) throw new Error(`${field} is required`);
+    }
+    if (!hasLineItems && !bookingData.description) {
+      throw new Error("description is required when items are not provided");
     }
 
     // Customer fields (id is injected by the controller from JWT)
@@ -30,11 +81,6 @@ async function addBooking(bookingData) {
     if (!date) throw new Error("scheduledDateTime.date is required");
     if (!timeSlot) throw new Error("scheduledDateTime.timeSlot is required (9am-12pm | 12pm-3pm | 3pm-6pm | 6pm-9pm)");
 
-    // payment.totalAmount
-    if (!bookingData.payment.totalAmount || bookingData.payment.totalAmount === 0) {
-      throw new Error("payment.totalAmount is required and must be greater than 0");
-    }
-
     // location — coordinates.latitude/longitude can be 0 (use explicit undefined check)
     const loc = bookingData.location;
     if (!loc.address || !loc.city || !loc.state || !loc.postalCode) {
@@ -46,13 +92,42 @@ async function addBooking(bookingData) {
       throw new Error("location.coordinates.latitude and longitude are required (use 0 if unknown)");
     }
 
-    // materials — normalise incoming array
-    const materials = (bookingData.materials || []).map((item) => ({
-      name: item.name || "Unknown",
-      price: item.price || 0,
-      quantity: item.quantity || 1,
-      unit: item.unit || "unit",
-    }));
+    if (hasLineItems) {
+      const { materials: resolvedMaterials, subtotal } = await buildMaterialsFromLineItems(
+        bookingData.items
+      );
+      bookingData.materials = resolvedMaterials;
+      const wallet = Math.max(0, Number(bookingData.walletCreditsUsed) || 0);
+      const computedTotal = Math.max(0, subtotal - wallet);
+      const submitted = bookingData.payment.totalAmount;
+      if (submitted !== undefined && submitted !== null && submitted !== "") {
+        if (Math.abs(Number(submitted) - computedTotal) > 1) {
+          throw new Error(
+            `payment.totalAmount (${submitted}) must match server total ${computedTotal} (subtotal ${subtotal}, wallet ${wallet})`
+          );
+        }
+      }
+      bookingData.payment = { ...bookingData.payment, totalAmount: computedTotal };
+      bookingData.description = resolvedMaterials.map((m) => m.name).join(", ");
+    }
+
+    // payment.totalAmount
+    if (!bookingData.payment.totalAmount || bookingData.payment.totalAmount === 0) {
+      throw new Error("payment.totalAmount is required and must be greater than 0");
+    }
+
+    // materials — normalise incoming array; keep Item ref when present
+    const materials = (bookingData.materials || []).map((item) => {
+      const row = {
+        name: item.name || "Unknown",
+        price: item.price || 0,
+        quantity: item.quantity || 1,
+        unit: item.unit || "unit",
+      };
+      const pid = item.id || item.productId;
+      if (pid) row.id = new mongoose.Types.ObjectId(String(pid));
+      return row;
+    });
 
     const newBooking = new Booking({
       serviceType: bookingData.serviceType,
@@ -77,7 +152,9 @@ async function addBooking(bookingData) {
         totalAmount: bookingData.payment.totalAmount,
         status: "pending",
         prePaidAmount: bookingData.payment.prePaidAmount || 0,
+        method: bookingData.payment.method || undefined,
       },
+      notes: bookingData.notes || undefined,
       assignee: { type: "admin", gardenerRef: null },
       history: {
         createdAt: new Date(),
@@ -814,6 +891,7 @@ const initiateOTPForBill = async (phoneNumber) => {
 
 module.exports = {
   addBooking,
+  buildMaterialsFromLineItems,
   addBookingFromEmail,
   cancelled,
   completed,

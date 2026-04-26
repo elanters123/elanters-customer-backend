@@ -1,7 +1,7 @@
 // controllers/web/orderController.js
 const CustomerCart = require('../../models/CustomerCart');
-const Item = require('../../models/Item');
 const Booking = require('../../models/Booking');
+const { buildMaterialsFromLineItems } = require('../../services/bookingService');
 require('../../models/Gardener');
 const { createRazorpayInstance } = require('../../config/razorpay');
 
@@ -93,20 +93,15 @@ const createOrder = async (req, res) => {
     if (!items?.length || !deliveryAddress || !paymentMethod)
       return res.status(400).json({ success: false, message: 'items, deliveryAddress and paymentMethod are required' });
 
-    let subtotal = 0;
-    const enrichedItems = [];
-    for (const item of items) {
-      const product = await Item.findById(item.productId);
-      if (!product) return res.status(404).json({ success: false, message: `Product ${item.productId} not found` });
-      const effectivePrice = product.offer > 0
-        ? Math.round(product.price * (1 - product.offer / 100))
-        : product.price;
-      subtotal += effectivePrice * item.quantity;
-      enrichedItems.push({
-        name: product.name,
-        price: effectivePrice,
-        quantity: item.quantity,
-      });
+    let enrichedItems;
+    let subtotal;
+    try {
+      const built = await buildMaterialsFromLineItems(items);
+      enrichedItems = built.materials;
+      subtotal = built.subtotal;
+    } catch (e) {
+      const status = /not found/i.test(e.message) ? 404 : 400;
+      return res.status(status).json({ success: false, message: e.message });
     }
 
     const deliveryFee = subtotal >= 500 ? 0 : 49;
