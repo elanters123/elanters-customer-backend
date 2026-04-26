@@ -47,9 +47,28 @@ async function addBooking(bookingData) {
       const expanded = expandGardenerBooking(bookingData.gardener);
       const topNotes = bookingData.notes ? String(bookingData.notes).trim() : "";
       const exNotes = expanded.notes ? String(expanded.notes).trim() : "";
+      /**
+       * Plants / catalog add-ons: prefer `catalogItems` when present so they are not confused
+       * with the expanded gardener `items` list; fall back to `items` (web/mobile send one or both).
+       */
+      const fromCatalog = Array.isArray(bookingData.catalogItems) ? bookingData.catalogItems : [];
+      const fromItems = Array.isArray(bookingData.items) ? bookingData.items : [];
+      const extraRaw = fromCatalog.length > 0 ? fromCatalog : fromItems;
       delete bookingData.gardener;
+      delete bookingData.catalogItems;
+      const extraItems = [];
+      for (const line of extraRaw) {
+        if (!line || !line.productId) {
+          throw new Error(
+            "When combining catalog lines with a gardener booking, each entry must include productId and quantity (use catalogItems or items)"
+          );
+        }
+        const qty = Math.max(1, Number(line.quantity) || 1);
+        extraItems.push({ productId: String(line.productId), quantity: qty });
+      }
+      const mergedItems = [...expanded.items, ...extraItems];
       Object.assign(bookingData, {
-        items: expanded.items,
+        items: mergedItems,
         scheduledDateTime: expanded.scheduledDateTime,
         serviceType: expanded.serviceType,
         description: expanded.description,
