@@ -1,7 +1,15 @@
-// controllers/web/catalogController.js
+// controllers/mobile/catalogController.js
 const Item = require('../../models/Item');
 const PincodeAvailability = require('../../models/PincodeAvailability');
 const CustomerWishlist = require('../../models/CustomerWishlist');
+const productReviewService = require('../../services/productReviewService');
+
+function attachReviewSummary(item, summaries) {
+  const plain = item.toObject ? item.toObject() : item;
+  const key = String(plain._id);
+  const s = summaries.get(key) || { avgRating: 0, reviewCount: 0 };
+  return { ...plain, avgRating: s.avgRating, reviewCount: s.reviewCount };
+}
 
 const getProducts = async (req, res) => {
   try {
@@ -15,8 +23,11 @@ const getProducts = async (req, res) => {
       .limit(Number(limit))
       .select('-__v');
 
+    const summaries = await productReviewService.getSummariesForProductIds(items.map((i) => i._id));
+    const enriched = items.map((item) => attachReviewSummary(item, summaries));
+
     const total = await Item.countDocuments(query);
-    res.json({ success: true, items, total, page: Number(page), limit: Number(limit) });
+    res.json({ success: true, items: enriched, total, page: Number(page), limit: Number(limit) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -26,7 +37,20 @@ const getProductById = async (req, res) => {
   try {
     const item = await Item.findById(req.params.id).select('-__v');
     if (!item) return res.status(404).json({ success: false, message: 'Product not found' });
-    res.json({ success: true, item });
+
+    const { summary, reviews } = await productReviewService.listProductReviews(req.params.id, {
+      limit: 50,
+    });
+    const plain = item.toObject();
+    res.json({
+      success: true,
+      item: {
+        ...plain,
+        avgRating: summary.avgRating,
+        reviewCount: summary.reviewCount,
+      },
+      reviews,
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

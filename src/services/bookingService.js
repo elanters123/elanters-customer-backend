@@ -11,6 +11,8 @@ var unirest = require("unirest");
 const  sendOTP  = require('./otpService.js');
 const otpRequested = require("../models/otpRequested.js");
 const { expandGardenerBooking } = require("./gardenerBookingExpand.js");
+const { validateBookingImage } = require("../utils/bookingImage.js");
+const { rewardReferralOnFirstCompletion } = require("./referralService");
 
 /**
  * Resolve cart lines to booking materials using live Item prices (same rules as web createOrder).
@@ -356,6 +358,13 @@ async function updatePayment(bookingId, paymentData, userId) {
     booking.history.lastModifiedBy = userId;
 
     const updatedBooking = await booking.save();
+    if (updatedBooking?.customer?.id) {
+      try {
+        await rewardReferralOnFirstCompletion({ customerId: updatedBooking.customer.id });
+      } catch (rewardError) {
+        console.warn("Referral reward skipped:", rewardError.message);
+      }
+    }
     return updatedBooking;
   } catch (error) {
     throw new Error(`Failed to update payment: ${error.message}`);
@@ -701,6 +710,32 @@ cron.schedule("0 0 9,12,15,18,21 * * *", async () => {
   }
 });
 
+async function setBookingBalconyPhoto(bookingId, imageDataUrl, userId) {
+  const image = validateBookingImage(imageDataUrl);
+  if (!image) throw new Error("image is required");
+
+  const booking = await Booking.findOne({
+    _id: bookingId,
+    "customer.id": userId,
+  });
+  if (!booking) throw new Error("Booking not found or not authorized");
+
+  booking.image = image;
+  booking.history.lastModifiedAt = new Date();
+  booking.history.lastModifiedBy = userId;
+  await booking.save();
+  return { uploadedAt: new Date().toISOString() };
+}
+
+async function getBookingBalconyPhoto(bookingId, userId) {
+  const booking = await Booking.findOne({
+    _id: bookingId,
+    "customer.id": userId,
+  }).select("image");
+  if (!booking) throw new Error("Booking not found or not authorized");
+  return booking.image || null;
+}
+
 async function addRating(bookingId, ratingData, userId) {
   try {
     const requiredFields = ["score"];
@@ -919,6 +954,8 @@ module.exports = {
   pending,
   addRating,
   getRating,
+  setBookingBalconyPhoto,
+  getBookingBalconyPhoto,
   updatePayment,
   getAvgRating,
   notverified,

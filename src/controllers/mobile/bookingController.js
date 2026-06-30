@@ -2,7 +2,11 @@
 // Same business logic as web, response shaped for mobile consumption.
 const bookingService = require('../../services/bookingService');
 const Booking = require('../../models/Booking');
-const Coupon = require('../../models/Coupon');
+const {
+  validateCouponForCheckout,
+  markCustomerCouponUsed,
+} = require('../../services/couponService');
+const { assertStandaloneEliteBody } = require('../../services/eliteService');
 
 function normalizeCreateBookingBody(body, customerId) {
   const d = body.deliveryAddress;
@@ -34,8 +38,16 @@ function normalizeCreateBookingBody(body, customerId) {
 
 const createBooking = async (req, res) => {
   try {
+    assertStandaloneEliteBody(req.body);
     const bookingData = normalizeCreateBookingBody(req.body, req.customerId);
     const booking = await bookingService.addBooking(bookingData);
+    const couponCode = req.body.couponCode || req.body.coupon?.code;
+    if (couponCode) {
+      await markCustomerCouponUsed({
+        customerId: req.customerId,
+        couponCode,
+      });
+    }
     res.status(201).json({ success: true, booking });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
@@ -52,7 +64,7 @@ const getMyBookings = async (req, res) => {
       .sort({ 'history.createdAt': -1 })
       .skip((page - 1) * limit)
       .limit(Number(limit))
-      .select('-__v');
+      .select('-__v -image');
 
     // Mobile gets a flat list — no pagination metadata needed by default
     res.json({ success: true, bookings, hasMore: bookings.length === Number(limit) });
@@ -66,7 +78,7 @@ const getBookingById = async (req, res) => {
     const booking = await Booking.findOne({
       _id: req.params.id,
       'customer.id': req.customerId,
-    }).select('-__v');
+    }).select('-__v -image');
     if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
     res.json({ success: true, booking });
   } catch (error) {
@@ -101,27 +113,27 @@ const verifyServiceOTP = async (req, res) => {
 const applyCoupon = async (req, res) => {
   try {
     const { code, totalAmount } = req.body;
-    if (!code || !totalAmount)
+    if (!code || totalAmount === undefined || totalAmount === null) {
       return res.status(400).json({ success: false, message: 'code and totalAmount are required' });
+    }
 
-    const coupon = await Coupon.findOne({ code: code.toUpperCase(), isActive: true });
-    if (!coupon) return res.status(404).json({ success: false, message: 'Invalid or expired coupon' });
-    if (coupon.endDate && coupon.endDate < new Date())
-      return res.status(400).json({ success: false, message: 'Coupon has expired' });
-    if (totalAmount < coupon.minPurchaseAmount)
-      return res.status(400).json({
-        success: false,
-        message: `Minimum order amount ₹${coupon.minPurchaseAmount} required`,
-      });
+    const result = await validateCouponForCheckout({
+      customerId: req.customerId,
+      code,
+      totalAmount,
+    });
 
-    let discount = (totalAmount * coupon.discountPercent) / 100;
-    if (coupon.maxDiscountAmount) discount = Math.min(discount, coupon.maxDiscountAmount);
+    if (!result.ok) {
+      return res.status(result.status).json({ success: false, message: result.message });
+    }
 
     res.json({
       success: true,
-      discount: Math.round(discount),
-      discountPercent: coupon.discountPercent,
-      couponCode: coupon.code,
+      discount: result.discount,
+      discountPercent: result.discountPercent,
+      couponCode: result.couponCode,
+      audience: result.audience,
+      customerCouponId: result.customerCouponId,
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -137,4 +149,41 @@ const submitRating = async (req, res) => {
   }
 };
 
-module.exports = { createBooking, getMyBookings, getBookingById, cancelBooking, verifyServiceOTP, applyCoupon, submitRating };
+/** POST body: { image: "data:image/...;base64,..." } — separate from create booking (heavy payload). */
+const uploadBalconyPhoto = async (req, res) => {
+  try {
+    const result = await bookingService.setBookingBalconyPhoto(
+      req.params.id,
+      req.body.image,
+      req.customerId,
+    );
+    res.status(201).json({ success: true, ...result });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+const getBalconyPhoto = async (req, res) => {
+  try {
+    const image = await bookingService.getBookingBalconyPhoto(req.params.id, req.customerId);
+    if (!image) {
+      return res.status(404).json({ success: false, message: 'No balcony photo for this booking' });
+    }
+    res.json({ success: true, image });
+  } catch (error) {
+    const status = /not found|not authorized/i.test(error.message) ? 404 : 400;
+    res.status(status).json({ success: false, message: error.message });
+  }
+};
+
+module.exports = {
+  createBooking,
+  getMyBookings,
+  getBookingById,
+  cancelBooking,
+  verifyServiceOTP,
+  applyCoupon,
+  submitRating,
+  uploadBalconyPhoto,
+  getBalconyPhoto,
+};

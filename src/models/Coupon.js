@@ -11,6 +11,12 @@ const couponSchema = new Schema(
     discountPercent: { type: Number, required: true },
     minPurchaseAmount: { type: Number, default: 0 },
     maxDiscountAmount: { type: Number },
+    audience: {
+      type: String,
+      enum: ["all_customers", "customer_specific"],
+      default: "all_customers",
+    },
+    eligibleCustomerIds: [{ type: Schema.Types.ObjectId, ref: "Customer" }],
     startDate: { type: Date, default: Date.now },
     endDate: { type: Date },
     isActive: { type: Boolean, default: true },

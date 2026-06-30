@@ -8,8 +8,16 @@ const sendOTP = async (req, res) => {
     const { phone } = req.body;
     if (!phone) return res.status(400).json({ success: false, message: 'Phone number is required' });
 
-    await authService.initiateCustomerOTP(phone);
-    res.json({ success: true, message: 'OTP sent successfully' });
+    const result = await authService.initiateCustomerOTP(phone);
+    const payload = { success: true, message: 'OTP sent successfully' };
+    // Non-production: help mobile/web testers (no SMS is sent in dev — see authService).
+    if (process.env.NODE_ENV !== 'production' && result.devOtp) {
+      payload.devOtp = result.devOtp;
+      payload.smsSent = false;
+    } else {
+      payload.smsSent = true;
+    }
+    res.json(payload);
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -17,10 +25,12 @@ const sendOTP = async (req, res) => {
 
 const verifyOTP = async (req, res) => {
   try {
-    const { phone, otp } = req.body;
+    const { phone, otp, referralCode } = req.body;
     if (!phone || !otp) return res.status(400).json({ success: false, message: 'Phone and OTP are required' });
 
-    const { customer, token, refreshToken, isNewUser } = await authService.verifyCustomerOTP(phone, otp);
+    const { customer, token, refreshToken, isNewUser } = await authService.verifyCustomerOTP(phone, otp, {
+      referralCode,
+    });
 
     // Return tokens in body for mobile storage (AsyncStorage / SecureStore)
     res.json({
@@ -56,4 +66,14 @@ const refreshToken = async (req, res) => {
   }
 };
 
-module.exports = { sendOTP, verifyOTP, refreshToken };
+const logout = async (req, res) => {
+  try {
+    const { fcmToken } = req.body ?? {};
+    await authService.logoutCustomer(req.customerId, { fcmToken });
+    res.json({ success: true, message: 'Logged out' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+module.exports = { sendOTP, verifyOTP, refreshToken, logout };

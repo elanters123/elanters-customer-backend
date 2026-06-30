@@ -15,8 +15,15 @@ const sendOTP = async (req, res) => {
     const { phone } = req.body;
     if (!phone) return res.status(400).json({ success: false, message: 'Phone number is required' });
 
-    await authService.initiateCustomerOTP(phone);
-    res.json({ success: true, message: 'OTP sent successfully' });
+    const result = await authService.initiateCustomerOTP(phone);
+    const payload = { success: true, message: 'OTP sent successfully' };
+    if (process.env.NODE_ENV !== 'production' && result.devOtp) {
+      payload.devOtp = result.devOtp;
+      payload.smsSent = false;
+    } else {
+      payload.smsSent = true;
+    }
+    res.json(payload);
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -24,10 +31,12 @@ const sendOTP = async (req, res) => {
 
 const verifyOTP = async (req, res) => {
   try {
-    const { phone, otp } = req.body;
+    const { phone, otp, referralCode } = req.body;
     if (!phone || !otp) return res.status(400).json({ success: false, message: 'Phone and OTP are required' });
 
-    const { customer, token, isNewUser } = await authService.verifyCustomerOTP(phone, otp);
+    const { customer, token, isNewUser } = await authService.verifyCustomerOTP(phone, otp, {
+      referralCode,
+    });
 
     // Set token in HttpOnly cookie for web
     res.cookie('customerToken', token, WEB_COOKIE_OPTIONS);
@@ -51,8 +60,32 @@ const verifyOTP = async (req, res) => {
   }
 };
 
-const logout = (req, res) => {
+const logout = async (req, res) => {
   res.clearCookie('customerToken', { httpOnly: true, sameSite: 'none', secure: true });
+  res.clearCookie('customerRefreshToken', { httpOnly: true, sameSite: 'none', secure: true });
+
+  let customerId = req.customerId;
+  if (!customerId) {
+    const token = req.cookies?.customerToken;
+    if (token) {
+      try {
+        const jwt = require('jsonwebtoken');
+        const decoded = jwt.verify(token, process.env.CUSTOMER_JWT_SECRET);
+        customerId = decoded.customerId;
+      } catch {
+        customerId = null;
+      }
+    }
+  }
+
+  if (customerId) {
+    try {
+      await authService.logoutCustomer(customerId);
+    } catch {
+      /* still return success after cookies cleared */
+    }
+  }
+
   res.json({ success: true, message: 'Logged out' });
 };
 

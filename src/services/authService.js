@@ -6,6 +6,8 @@ const jwt    = require('jsonwebtoken');
 const unirest = require('unirest');
 const Customer   = require('../models/Customer.js');
 const CustomerOTP = require('../models/CustomerOTP.js');
+const CustomerPushToken = require('../models/CustomerPushToken.js');
+const { applyReferralCodeAtSignup } = require('./referralService');
 
 const generateOTP = () =>
   process.env.NODE_ENV !== 'production'
@@ -43,15 +45,22 @@ const initiateCustomerOTP = async (phone) => {
   await CustomerOTP.deleteMany({ phone });
   await CustomerOTP.create({ phone, otp, expiryTime: expiry, status: 'Pending' });
 
-  if (process.env.NODE_ENV === 'production') {
+  const sendRealSms =
+    process.env.NODE_ENV === 'production' || process.env.OTP_SEND_SMS === 'true';
+  if (sendRealSms) {
     await sendSMSOTP(phone, otp);
   } else {
-    console.log(`[CustomerAuth DEV] OTP for ${phone}: ${otp}`);
+    console.log(`[CustomerAuth DEV] OTP for ${phone}: ${otp} (SMS not sent — set OTP_SEND_SMS=true to send)`);
   }
-  return { status: 'success' };
+  return {
+    status: 'success',
+    devOtp: process.env.NODE_ENV !== 'production' ? otp : undefined,
+    smsSent: sendRealSms,
+  };
 };
 
-const verifyCustomerOTP = async (phone, otp) => {
+const verifyCustomerOTP = async (phone, otp, options = {}) => {
+  const { referralCode } = options;
   const record = await CustomerOTP.findOne({ phone, otp, status: 'Pending' });
   if (!record) throw new Error('Invalid OTP');
   if (record.expiryTime < new Date()) {
@@ -64,32 +73,69 @@ const verifyCustomerOTP = async (phone, otp) => {
   let customer = await Customer.findOne({ phoneNumber: phone });
   const isNewUser = !customer;
   if (!customer) customer = await Customer.create({ phoneNumber: phone });
+  if (isNewUser && referralCode) {
+    await applyReferralCodeAtSignup({ customerId: customer._id, referralCode });
+    customer = await Customer.findById(customer._id);
+  }
 
-  const token = signToken(customer._id);
-  const refreshToken = signRefreshToken(customer._id);
+  const token = signToken(customer);
+  const refreshToken = signRefreshToken(customer);
   return { customer, token, refreshToken, isNewUser };
 };
 
-const signToken = (customerId) =>
-  jwt.sign({ customerId: customerId.toString() }, process.env.CUSTOMER_JWT_SECRET, {
-    expiresIn: '7d',
-  });
+const sessionVersionOf = (customer) => customer?.sessionVersion ?? 0;
 
-const signRefreshToken = (customerId) =>
-  jwt.sign({ customerId: customerId.toString() }, process.env.CUSTOMER_JWT_REFRESH_SECRET, {
-    expiresIn: '30d',
-  });
+const signToken = (customer) =>
+  jwt.sign(
+    { customerId: customer._id.toString(), sessionVersion: sessionVersionOf(customer) },
+    process.env.CUSTOMER_JWT_SECRET,
+    { expiresIn: '7d' },
+  );
+
+const signRefreshToken = (customer) =>
+  jwt.sign(
+    { customerId: customer._id.toString(), sessionVersion: sessionVersionOf(customer) },
+    process.env.CUSTOMER_JWT_REFRESH_SECRET,
+    { expiresIn: '30d' },
+  );
+
+const assertSessionActive = (customer, decoded) => {
+  if (!customer) throw new Error('Customer not found');
+  if (customer.accountStatus === 'blocked') throw new Error('Account is blocked');
+  const tokenVersion = decoded.sessionVersion ?? 0;
+  if (tokenVersion !== sessionVersionOf(customer)) {
+    throw new Error('Session ended');
+  }
+};
 
 const refreshCustomerToken = async (refreshToken) => {
   const decoded = jwt.verify(refreshToken, process.env.CUSTOMER_JWT_REFRESH_SECRET);
   const customer = await Customer.findById(decoded.customerId);
-  if (!customer) throw new Error('Customer not found');
-  return { token: signToken(customer._id) };
+  assertSessionActive(customer, decoded);
+  return { token: signToken(customer) };
+};
+
+/** End mobile/web session: invalidate tokens and remove push registrations. */
+const logoutCustomer = async (customerId, { fcmToken } = {}) => {
+  const id = customerId?.toString();
+  if (!id) throw new Error('Customer id is required');
+
+  await Customer.findByIdAndUpdate(id, { $inc: { sessionVersion: 1 } });
+
+  if (fcmToken) {
+    await CustomerPushToken.deleteMany({ customerId: id, token: fcmToken });
+  } else {
+    await CustomerPushToken.deleteMany({ customerId: id });
+  }
+
+  return { success: true };
 };
 
 module.exports = {
   initiateCustomerOTP,
   verifyCustomerOTP,
   refreshCustomerToken,
+  logoutCustomer,
+  assertSessionActive,
   signToken,
 };

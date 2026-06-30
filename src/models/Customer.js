@@ -53,7 +53,17 @@ const customerSchema = new Schema({
   walletBalance: { type: Number, default: 0 },
   referralCode: { type: String, unique: true, sparse: true },
   referredBy: { type: Types.ObjectId, ref: 'Customer', default: null },
+  referredAt: { type: Date, default: null },
+  referralRewardGrantedAt: { type: Date, default: null },
   addresses: { type: [addressSchema], default: [] },  // max 5 enforced in route
+  /** Bumped on logout — JWTs with an older version are rejected. */
+  sessionVersion: { type: Number, default: 0 },
+
+  /** Elite membership — standalone purchase, not clubbed with cart orders. */
+  eliteMemberId: { type: String, default: null, sparse: true, index: true },
+  eliteMemberSince: { type: Date, default: null },
+  eliteMemberExpiresAt: { type: Date, default: null },
+  eliteCouponCode: { type: String, default: null },
 }, { timestamps: true });
 
 customerSchema.pre('save', function (next) {

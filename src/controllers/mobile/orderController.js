@@ -4,6 +4,8 @@ const CustomerOrder = require('../../models/CustomerOrder');
 const CustomerCart = require('../../models/CustomerCart');
 const Item = require('../../models/Item');
 const { createRazorpayInstance } = require('../../config/razorpay');
+const { markCustomerCouponUsed } = require('../../services/couponService');
+const { assertStandaloneEliteBody } = require('../../services/eliteService');
 const crypto = require('crypto');
 
 const getOrders = async (req, res) => {
@@ -39,6 +41,7 @@ const getOrderById = async (req, res) => {
 
 const createOrder = async (req, res) => {
   try {
+    assertStandaloneEliteBody(req.body);
     const { items, deliveryAddress, paymentMethod, couponCode, walletCreditsUsed = 0 } = req.body;
     if (!items?.length || !deliveryAddress || !paymentMethod)
       return res.status(400).json({ success: false, message: 'items, deliveryAddress and paymentMethod are required' });
@@ -71,13 +74,18 @@ const createOrder = async (req, res) => {
       walletCreditsUsed,
       paymentMethod,
       razorpayOrderId: razorpayOrder.id,
+      ...(paymentMethod === 'cod' ? { paymentStatus: 'pending', status: 'confirmed' } : {}),
     });
+
+    if (couponCode && paymentMethod === 'cod') {
+      await markCustomerCouponUsed({ customerId: req.customerId, couponCode });
+    }
 
     res.status(201).json({
       success: true,
       orderId: order._id,
       razorpayOrderId: razorpayOrder.id,
-      razorpayKeyId: process.env.RAZ_ID,
+      razorpayKeyId: process.env.RAZORPAY_KEY_ID || process.env.RAZ_ID,
       amount: razorpayOrder.amount,
       currency: 'INR',
     });
@@ -91,7 +99,7 @@ const confirmPayment = async (req, res) => {
     const { razorpayOrderId, razorpayPaymentId, razorpaySignature } = req.body;
 
     const expected = crypto
-      .createHmac('sha256', process.env.RAZ_SECRET)
+      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET || process.env.RAZ_SECRET)
       .update(`${razorpayOrderId}|${razorpayPaymentId}`)
       .digest('hex');
 
@@ -112,6 +120,13 @@ const confirmPayment = async (req, res) => {
     );
 
     if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
+
+    if (order.couponCode) {
+      await markCustomerCouponUsed({
+        customerId: req.customerId,
+        couponCode: order.couponCode,
+      });
+    }
 
     await CustomerCart.findOneAndUpdate({ customerId: req.customerId }, { $set: { items: [], couponCode: null } });
 

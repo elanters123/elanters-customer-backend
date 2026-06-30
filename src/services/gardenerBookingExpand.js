@@ -1,5 +1,19 @@
 const { potBand, repot, standalone, grassBands, GRASS_AREA_ORDER } = require("../config/gardenerSkuMap");
 
+const MIN_BOOKING_LEAD_HOURS = 3;
+
+function assertSlotStartsAtLeastHoursAhead(serviceDateYmd, hour, leadHours = MIN_BOOKING_LEAD_HOURS) {
+  const [y, mo, d] = String(serviceDateYmd).split("-").map(Number);
+  if (!y || !mo || !d) throw new Error("gardener.serviceDate must be YYYY-MM-DD");
+  const slotStart = new Date(y, mo - 1, d, hour, 0, 0, 0);
+  const earliest = Date.now() + leadHours * 60 * 60 * 1000;
+  if (slotStart.getTime() < earliest) {
+    throw new Error(
+      `Booking must be made at least ${leadHours} hours before the visit time slot starts`,
+    );
+  }
+}
+
 const HOME_VILLA_SLOT_TO_BACKEND = {
   "9-12": "9am-12pm",
   "12-15": "12pm-3pm",
@@ -89,6 +103,7 @@ function expandGardenerBooking(g) {
     if (rs > 0) items.push({ productId: repot.upto12, quantity: rs });
     if (rl > 0) items.push({ productId: repot.above12, quantity: rl });
     const { timeSlot, hour } = normalizeHomeVillaSlot(slotKey);
+    assertSlotStartsAtLeastHoursAhead(serviceDate, hour);
     scheduledDateTime = { date: toLocalDateISO(serviceDate, hour), timeSlot };
     descriptionParts.push(`Home gardener (${tier} pots band)`);
     if (h.fertilizerFromGardener) {
@@ -97,6 +112,7 @@ function expandGardenerBooking(g) {
   } else if (flow === "villa") {
     items.push({ productId: standalone.villa, quantity: 1 });
     const { timeSlot, hour } = normalizeHomeVillaSlot(slotKey);
+    assertSlotStartsAtLeastHoursAhead(serviceDate, hour);
     scheduledDateTime = { date: toLocalDateISO(serviceDate, hour), timeSlot };
     descriptionParts.push("Villa / independent house gardener visit");
   } else if (flow === "grass") {
@@ -116,6 +132,7 @@ function expandGardenerBooking(g) {
       hour = Number.isFinite(hourRaw) ? hourRaw : 9;
     }
     const timeSlot = mapGrassSlotKeyToBackend(String(hour));
+    assertSlotStartsAtLeastHoursAhead(serviceDate, hour);
     scheduledDateTime = { date: toLocalDateISO(serviceDate, hour), timeSlot };
     descriptionParts.push("Grass cutting / lawn service");
   } else {

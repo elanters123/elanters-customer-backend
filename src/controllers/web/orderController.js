@@ -2,6 +2,7 @@
 const CustomerCart = require('../../models/CustomerCart');
 const Booking = require('../../models/Booking');
 const { buildMaterialsFromLineItems } = require('../../services/bookingService');
+const { assertStandaloneEliteBody } = require('../../services/eliteService');
 require('../../models/Gardener');
 const { createRazorpayInstance } = require('../../config/razorpay');
 
@@ -89,6 +90,7 @@ function bookingToOrder(b) {
 
 const createOrder = async (req, res) => {
   try {
+    assertStandaloneEliteBody(req.body);
     const { items, deliveryAddress, paymentMethod, couponCode, walletCreditsUsed = 0 } = req.body;
     if (!items?.length || !deliveryAddress || !paymentMethod)
       return res.status(400).json({ success: false, message: 'items, deliveryAddress and paymentMethod are required' });
