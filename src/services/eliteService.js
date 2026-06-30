@@ -4,10 +4,7 @@ const Coupon = require('../models/Coupon');
 const CustomerCoupon = require('../models/CustomerCoupon');
 const EliteMembershipOrder = require('../models/EliteMembershipOrder');
 const { createRazorpayInstance, getRazorpayKeySecret } = require('../config/razorpay');
-
-const ELITE_SALE_PRICE = 299;
-const ELITE_DURATION_MONTHS = 6;
-const ELITE_DISCOUNT_PERCENT = 15;
+const { getActiveElitePlan } = require('./elitePlanService');
 
 const ELITE_STANDALONE_MIX_MESSAGE =
   'Elite membership must be purchased separately and cannot be clubbed with plants, gardener visits, or other products.';
@@ -27,13 +24,14 @@ function generateEliteMemberId() {
   return `ELM-${y}${m}${day}-${randomSuffix()}`;
 }
 
-function generateEliteCouponCode() {
-  return `ELITE15-${randomSuffix()}`;
+function generateEliteCouponCode(prefix = 'ELITE15') {
+  const safePrefix = String(prefix || 'ELITE15').trim().toUpperCase();
+  return `${safePrefix}-${randomSuffix()}`;
 }
 
-function eliteExpiresAt(from = new Date()) {
+function eliteExpiresAt(durationMonths, from = new Date()) {
   const d = new Date(from);
-  d.setMonth(d.getMonth() + ELITE_DURATION_MONTHS);
+  d.setMonth(d.getMonth() + Number(durationMonths || 6));
   return d;
 }
 
@@ -70,15 +68,32 @@ function assertEliteOnlinePayment(paymentMethod) {
   }
 }
 
-async function issueEliteCoupon({ customerId, couponCode, expiresAt }) {
+function planSnapshotFromDoc(plan) {
+  return {
+    planId: String(plan._id),
+    slug: plan.slug,
+    mrp: plan.mrp,
+    salePrice: plan.salePrice,
+    durationMonths: plan.durationMonths,
+    durationLabel: plan.durationLabel,
+    discountPercent: plan.discountPercent,
+    couponCodePrefix: plan.couponCodePrefix,
+    checkoutDescription: plan.checkoutDescription,
+    version: plan.version ?? 1,
+  };
+}
+
+async function issueEliteCoupon({ customerId, couponCode, expiresAt, plan }) {
   const code = String(couponCode).trim().toUpperCase();
   let coupon = await Coupon.findOne({ code });
   if (!coupon) {
     coupon = await Coupon.create({
-      name: 'Elite member discount',
+      name: plan.couponName || 'Elite member discount',
       code,
-      description: '15% off gardener services and gardening materials (not plants)',
-      discountPercent: ELITE_DISCOUNT_PERCENT,
+      description:
+        plan.couponDescription ||
+        `${plan.discountPercent}% off gardener services and gardening materials (not plants)`,
+      discountPercent: plan.discountPercent,
       minPurchaseAmount: 0,
       audience: 'customer_specific',
       endDate: expiresAt,
@@ -105,7 +120,8 @@ async function issueEliteCoupon({ customerId, couponCode, expiresAt }) {
   return { coupon, assignment };
 }
 
-async function activateEliteMembership(customerId) {
+async function activateEliteMembership(customerId, planDoc) {
+  const plan = planDoc || (await getActiveElitePlan());
   const customer = await Customer.findById(customerId);
   if (!customer) {
     const err = new Error('Customer not found');
@@ -121,14 +137,15 @@ async function activateEliteMembership(customerId) {
       couponCode: customer.eliteCouponCode,
       expiresAt: customer.eliteMemberExpiresAt,
       alreadyActive: true,
+      plan,
     };
   }
 
   const memberId = generateEliteMemberId();
-  const couponCode = generateEliteCouponCode();
-  const expiresAt = eliteExpiresAt(now);
+  const couponCode = generateEliteCouponCode(plan.couponCodePrefix);
+  const expiresAt = eliteExpiresAt(plan.durationMonths, now);
 
-  await issueEliteCoupon({ customerId, couponCode, expiresAt });
+  await issueEliteCoupon({ customerId, couponCode, expiresAt, plan });
 
   customer.eliteMemberId = memberId;
   customer.eliteMemberSince = now;
@@ -142,11 +159,15 @@ async function activateEliteMembership(customerId) {
     couponCode,
     expiresAt,
     alreadyActive: false,
+    plan,
   };
 }
 
 async function createElitePurchaseIntent(customerId) {
-  const customer = await Customer.findById(customerId).select('eliteMemberSince eliteMemberExpiresAt eliteMemberId eliteCouponCode');
+  const plan = await getActiveElitePlan();
+  const customer = await Customer.findById(customerId).select(
+    'eliteMemberSince eliteMemberExpiresAt eliteMemberId eliteCouponCode',
+  );
   if (!customer) {
     const err = new Error('Customer not found');
     err.status = 404;
@@ -161,22 +182,30 @@ async function createElitePurchaseIntent(customerId) {
 
   const razorpay = createRazorpayInstance();
   const razorpayOrder = await razorpay.orders.create({
-    amount: Math.round(ELITE_SALE_PRICE * 100),
-    currency: 'INR',
+    amount: Math.round(plan.salePrice * 100),
+    currency: plan.currency || 'INR',
     receipt: `elite_${Date.now()}`,
-    notes: { purpose: 'elite_membership', customerId: String(customerId) },
+    notes: {
+      purpose: 'elite_membership',
+      customerId: String(customerId),
+      elitePlanId: String(plan._id),
+    },
   });
 
+  const snapshot = planSnapshotFromDoc(plan);
   const record = await EliteMembershipOrder.create({
     customerId,
-    amount: ELITE_SALE_PRICE,
+    amount: plan.salePrice,
+    currency: plan.currency || 'INR',
     paymentMethod: 'online',
     paymentStatus: 'pending',
     razorpayOrderId: razorpayOrder.id,
     status: 'pending',
+    elitePlanId: plan._id,
+    planSnapshot: snapshot,
   });
 
-  return { razorpayOrder, record };
+  return { razorpayOrder, record, plan };
 }
 
 function verifyRazorpaySignature({ razorpayOrderId, razorpayPaymentId, razorpaySignature }) {
@@ -232,7 +261,16 @@ async function confirmElitePayment({
     throw err;
   }
 
-  const activation = await activateEliteMembership(customerId);
+  let plan = null;
+  if (order.elitePlanId) {
+    const ElitePlan = require('../models/ElitePlan');
+    plan = await ElitePlan.findById(order.elitePlanId);
+  }
+  if (!plan) {
+    plan = await getActiveElitePlan();
+  }
+
+  const activation = await activateEliteMembership(customerId, plan);
 
   order.paymentStatus = 'paid';
   order.status = 'activated';
@@ -240,6 +278,10 @@ async function confirmElitePayment({
   order.razorpaySignature = razorpaySignature;
   order.eliteMemberId = activation.memberId;
   order.eliteCouponCode = activation.couponCode;
+  if (!order.elitePlanId) {
+    order.elitePlanId = plan._id;
+    order.planSnapshot = planSnapshotFromDoc(plan);
+  }
   await order.save();
 
   return {
@@ -248,11 +290,12 @@ async function confirmElitePayment({
     couponCode: activation.couponCode,
     expiresAt: activation.expiresAt,
     alreadyActive: activation.alreadyActive,
+    discountPercent: plan.discountPercent,
+    couponCodePrefix: plan.couponCodePrefix,
   };
 }
 
 module.exports = {
-  ELITE_SALE_PRICE,
   ELITE_STANDALONE_MIX_MESSAGE,
   ELITE_UPFRONT_PAYMENT_MESSAGE,
   assertStandaloneEliteBody,

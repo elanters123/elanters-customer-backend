@@ -17,6 +17,22 @@ const eliteMembershipOrderSchema = new Schema(
     razorpaySignature: { type: String, default: null },
     eliteMemberId: { type: String, default: null },
     eliteCouponCode: { type: String, default: null },
+    elitePlanId: { type: Types.ObjectId, ref: 'ElitePlan', default: null },
+    planSnapshot: {
+      type: {
+        planId: String,
+        slug: String,
+        mrp: Number,
+        salePrice: Number,
+        durationMonths: Number,
+        durationLabel: String,
+        discountPercent: Number,
+        couponCodePrefix: String,
+        checkoutDescription: String,
+        version: Number,
+      },
+      default: null,
+    },
     status: {
       type: String,
       enum: ['pending', 'activated', 'cancelled'],
