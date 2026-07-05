@@ -24,8 +24,8 @@ function generateEliteMemberId() {
   return `ELM-${y}${m}${day}-${randomSuffix()}`;
 }
 
-function generateEliteCouponCode(prefix = 'ELITE15') {
-  const safePrefix = String(prefix || 'ELITE15').trim().toUpperCase();
+function generateEliteCouponCode(prefix = 'ELITE10') {
+  const safePrefix = String(prefix || 'ELITE10').trim().toUpperCase();
   return `${safePrefix}-${randomSuffix()}`;
 }
 
@@ -92,7 +92,7 @@ async function issueEliteCoupon({ customerId, couponCode, expiresAt, plan }) {
       code,
       description:
         plan.couponDescription ||
-        `${plan.discountPercent}% off gardener services and gardening materials (not plants)`,
+        `${plan.discountPercent}% off your total bill`,
       discountPercent: plan.discountPercent,
       minPurchaseAmount: 0,
       audience: 'customer_specific',

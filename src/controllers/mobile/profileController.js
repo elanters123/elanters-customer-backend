@@ -73,7 +73,42 @@ const addAddress = async (req, res) => {
     if (customer.addresses.length >= 5)
       return res.status(400).json({ success: false, message: 'Maximum 5 addresses allowed' });
 
-    customer.addresses.push(req.body);
+    const { label, line1, line2, city, pincode, state, isDefault } = req.body;
+    if (!line1?.trim() || !city?.trim() || !state?.trim()) {
+      return res.status(400).json({ success: false, message: 'line1, city and state are required' });
+    }
+    const pin = String(pincode || '').replace(/\D/g, '').slice(0, 6);
+    if (pin.length !== 6) {
+      return res.status(400).json({ success: false, message: 'A valid 6-digit pincode is required' });
+    }
+
+    const next = {
+      label: label || 'home',
+      line1: String(line1).trim(),
+      line2: line2?.trim() ? String(line2).trim() : undefined,
+      city: String(city).trim(),
+      pincode: pin,
+      state: String(state).trim(),
+      isDefault: Boolean(isDefault),
+    };
+
+    if (next.isDefault) {
+      customer.addresses.forEach((a) => { a.isDefault = false; });
+    }
+    customer.addresses.push(next);
+    if (!customer.addresses.some((a) => a.isDefault)) {
+      const first = customer.addresses[0];
+      if (first) first.isDefault = true;
+    }
+
+    const selected = customer.addresses.find((a) => a.isDefault) || customer.addresses[0];
+    if (selected) {
+      customer.address = [selected.line1, selected.line2].filter(Boolean).join(', ');
+      customer.city = selected.city || '';
+      customer.state = selected.state || '';
+      customer.pincode = selected.pincode || '';
+    }
+
     await customer.save();
     res.status(201).json({ success: true, addresses: customer.addresses });
   } catch (error) {

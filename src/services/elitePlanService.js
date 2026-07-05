@@ -5,54 +5,53 @@ const DEFAULT_PLAN = {
   isActive: true,
   title: 'Elite Membership',
   headline: 'Join Elite Membership & Save More 🌿',
-  subtitle: 'Get more value on every gardening service!',
+  subtitle: 'Get more value on every order!',
   description:
-    'Create your exclusive Elite coupon code and enjoy flat 15% OFF on gardener services and material charges. Discount not applicable on plants.',
+    'Flat 10% OFF on total billing — including gardener services, materials, plants, and more.',
   benefits: [
-    'Enjoy instant 15% discount on every gardener service',
-    'Save more when you book regular garden care',
-    'Unique Elite coupon code generated automatically after purchase',
-    'Coupon applies at checkout on gardener services & materials (not plants)',
+    '10% off on total billing — services, materials, plants & more',
+    'Unique coupon code after purchase',
+    'Valid for 6 months',
   ],
   mrp: 699,
   salePrice: 299,
   currency: 'INR',
   durationMonths: 6,
   durationLabel: '6 months',
-  discountPercent: 15,
-  couponCodePrefix: 'ELITE15',
+  discountPercent: 10,
+  couponCodePrefix: 'ELITE10',
   couponName: 'Elite member discount',
-  couponDescription: '15% off gardener services and gardening materials (not plants)',
+  couponDescription: '10% off on total billing including services, materials, plants & more',
   checkoutDescription: 'Elite Membership (6 months)',
   imageUrl:
     'https://images.unsplash.com/photo-1416879595882-3373a0480b5b?w=200&q=80&auto=format&fit=crop',
   bannerLines: [
-    'Flat 15% OFF on every gardener service',
+    'Flat 10% OFF on total billing',
     '₹299 for 6 months · was ₹699',
     'Save ₹400 (57% off) with Elite',
-    'Best for frequent gardener bookings',
+    'Includes services, materials, plants & more',
   ],
   howItWorks: [
     'Buy Elite Membership with secure online payment',
     'Receive your unique member ID and coupon code instantly',
-    'Book gardener services and apply your coupon at checkout',
-    'Enjoy 15% off on services & materials for 6 months',
+    'Shop plants, book gardener services, and apply your coupon at checkout',
+    'Enjoy 10% off on total billing for 6 months',
   ],
   faq: [
     {
       question: 'What is Elite Membership?',
       answer:
-        'Elite is a 6-month membership that gives you a personal coupon code for 15% off gardener services and gardening materials. Plants are excluded.',
+        'Elite is a 6-month membership that gives you a personal coupon code for 10% off your total bill on every eligible order.',
     },
     {
       question: 'How is my coupon code created?',
       answer:
-        'After successful payment, we generate a unique code (e.g. ELITE15-XXXXXXXX) and assign it to your account automatically.',
+        'After successful payment, we generate a unique code (e.g. ELITE10-XXXXXXXX) and assign it to your account automatically.',
     },
     {
       question: 'Can I use Elite with plants or other cart items?',
       answer:
-        'Elite must be purchased on its own. The membership discount applies to gardener bookings and eligible material charges, not plants.',
+        'Elite must be purchased on its own. Once active, your 10% discount applies to your total bill — plants, gardener visits, and materials.',
     },
     {
       question: 'How long is the membership valid?',

@@ -7,6 +7,15 @@ const {
   markCustomerCouponUsed,
 } = require('../../services/couponService');
 const { assertStandaloneEliteBody } = require('../../services/eliteService');
+const {
+  initBookingOnlinePayment,
+  confirmBookingOnlinePayment,
+} = require('../../services/bookingPaymentService');
+
+function isOnlinePaymentMethod(body) {
+  const method = String(body.paymentMethod || body.payment?.method || '').toLowerCase();
+  return method === 'online' || method === 'upi';
+}
 
 function normalizeCreateBookingBody(body, customerId) {
   const d = body.deliveryAddress;
@@ -39,6 +48,42 @@ function normalizeCreateBookingBody(body, customerId) {
 const createBooking = async (req, res) => {
   try {
     assertStandaloneEliteBody(req.body);
+
+    if (req.body.confirmOnlinePayment) {
+      const { razorpayOrderId, razorpayPaymentId, razorpaySignature, couponCode } = req.body;
+      if (!razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
+        return res.status(400).json({
+          success: false,
+          message: 'razorpayOrderId, razorpayPaymentId and razorpaySignature are required',
+        });
+      }
+      const booking = await confirmBookingOnlinePayment(req.customerId, {
+        razorpayOrderId,
+        razorpayPaymentId,
+        razorpaySignature,
+        couponCode,
+      });
+      return res.json({ success: true, booking });
+    }
+
+    if (isOnlinePaymentMethod(req.body)) {
+      const { booking, razorpayOrder, razorpayKeyId, prefill, couponCode } =
+        await initBookingOnlinePayment(req.customerId, req.body);
+      return res.status(201).json({
+        success: true,
+        needsPayment: true,
+        bookingId: booking._id,
+        booking,
+        razorpayOrderId: razorpayOrder.id,
+        razorpayKeyId,
+        amount: razorpayOrder.amount,
+        currency: razorpayOrder.currency || 'INR',
+        description: booking.description || 'Gardener booking',
+        prefill,
+        couponCode,
+      });
+    }
+
     const bookingData = normalizeCreateBookingBody(req.body, req.customerId);
     const booking = await bookingService.addBooking(bookingData);
     const couponCode = req.body.couponCode || req.body.coupon?.code;
@@ -50,7 +95,7 @@ const createBooking = async (req, res) => {
     }
     res.status(201).json({ success: true, booking });
   } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
+    res.status(error.status || 400).json({ success: false, message: error.message });
   }
 };
 
@@ -176,6 +221,48 @@ const getBalconyPhoto = async (req, res) => {
   }
 };
 
+const initPayment = async (req, res) => {
+  try {
+    assertStandaloneEliteBody(req.body);
+    const { booking, razorpayOrder, razorpayKeyId, prefill, couponCode } =
+      await initBookingOnlinePayment(req.customerId, req.body);
+    res.status(201).json({
+      success: true,
+      bookingId: booking._id,
+      razorpayOrderId: razorpayOrder.id,
+      razorpayKeyId,
+      amount: razorpayOrder.amount,
+      currency: razorpayOrder.currency || 'INR',
+      description: booking.description || 'Gardener booking',
+      prefill,
+      couponCode,
+    });
+  } catch (error) {
+    res.status(error.status || 400).json({ success: false, message: error.message });
+  }
+};
+
+const confirmPayment = async (req, res) => {
+  try {
+    const { razorpayOrderId, razorpayPaymentId, razorpaySignature, couponCode } = req.body;
+    if (!razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
+      return res.status(400).json({
+        success: false,
+        message: 'razorpayOrderId, razorpayPaymentId and razorpaySignature are required',
+      });
+    }
+    const booking = await confirmBookingOnlinePayment(req.customerId, {
+      razorpayOrderId,
+      razorpayPaymentId,
+      razorpaySignature,
+      couponCode,
+    });
+    res.json({ success: true, booking });
+  } catch (error) {
+    res.status(error.status || 400).json({ success: false, message: error.message });
+  }
+};
+
 module.exports = {
   createBooking,
   getMyBookings,
@@ -186,4 +273,6 @@ module.exports = {
   submitRating,
   uploadBalconyPhoto,
   getBalconyPhoto,
+  initPayment,
+  confirmPayment,
 };

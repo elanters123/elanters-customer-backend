@@ -121,14 +121,20 @@ async function addBooking(bookingData) {
       const wallet = Math.max(0, Number(bookingData.walletCreditsUsed) || 0);
       const computedTotal = Math.max(0, subtotal - wallet);
       const submitted = bookingData.payment.totalAmount;
-      if (submitted !== undefined && submitted !== null && submitted !== "") {
+      const couponCode = bookingData.couponCode || bookingData.coupon?.code;
+      if (submitted !== undefined && submitted !== null && submitted !== "" && !couponCode) {
         if (Math.abs(Number(submitted) - computedTotal) > 1) {
           throw new Error(
             `payment.totalAmount (${submitted}) must match server total ${computedTotal} (subtotal ${subtotal}, wallet ${wallet})`
           );
         }
       }
-      bookingData.payment = { ...bookingData.payment, totalAmount: computedTotal };
+      bookingData.payment = {
+        ...bookingData.payment,
+        totalAmount: couponCode && submitted != null && submitted !== ""
+          ? Math.max(0, Number(submitted))
+          : computedTotal,
+      };
       bookingData.description = resolvedMaterials.map((m) => m.name).join(", ");
     }
 
@@ -153,7 +159,7 @@ async function addBooking(bookingData) {
     const newBooking = new Booking({
       serviceType: bookingData.serviceType,
       description: bookingData.description,
-      status: "upcoming",
+      status: bookingData.status || "upcoming",
       eOrderId: bookingData.eOrderId || undefined,
       customer: { id, name, phone, email },
       scheduledDateTime: { date: new Date(date), timeSlot },

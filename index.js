@@ -67,6 +67,7 @@ app.use(`${BASE}/web/elite`,    secretTokenMiddleware, require('./src/routes/web
 app.use(`${BASE}/web/tickets`,  secretTokenMiddleware, require('./src/routes/web/tickets'));
 app.use(`${BASE}/web/service-reviews`, secretTokenMiddleware, require('./src/routes/web/serviceReviews'));
 app.use(`${BASE}/web/product-reviews`, secretTokenMiddleware, require('./src/routes/web/productReviews'));
+app.use(`${BASE}/web/address`,         secretTokenMiddleware, require('./src/routes/web/address'));
 
 // ─── Mobile Routes ────────────────────────────────────────────────────────────
 app.use(`${BASE}/mobile/auth`,     secretTokenMiddleware, require('./src/routes/mobile/auth'));
@@ -79,6 +80,7 @@ app.use(`${BASE}/mobile/tickets`,  secretTokenMiddleware, require('./src/routes/
 app.use(`${BASE}/mobile/service-reviews`, secretTokenMiddleware, require('./src/routes/mobile/serviceReviews'));
 app.use(`${BASE}/mobile/product-reviews`, secretTokenMiddleware, require('./src/routes/mobile/productReviews'));
 app.use(`${BASE}/mobile/elite`,           secretTokenMiddleware, require('./src/routes/mobile/elite'));
+app.use(`${BASE}/mobile/address`,         secretTokenMiddleware, require('./src/routes/mobile/address'));
 
 // ─── Health ───────────────────────────────────────────────────────────────────
 app.get('/health', (req, res) => res.json({

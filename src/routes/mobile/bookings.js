@@ -3,10 +3,12 @@ const auth = require('../../middleware/auth');
 const {
   createBooking, getMyBookings, getBookingById,
   cancelBooking, verifyServiceOTP, applyCoupon, submitRating,
-  uploadBalconyPhoto, getBalconyPhoto,
+  uploadBalconyPhoto, getBalconyPhoto, initPayment, confirmPayment,
 } = require('../../controllers/mobile/bookingController');
 
 router.post('/', auth, createBooking);
+router.post('/init-payment', auth, initPayment);
+router.post('/confirm-payment', auth, confirmPayment);
 router.get('/', auth, getMyBookings);
 router.post('/apply-coupon', auth, applyCoupon);
 router.get('/:id/balcony-photo', auth, getBalconyPhoto);
