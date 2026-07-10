@@ -4,6 +4,8 @@
  */
 
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || '';
+/** Prefer English address labels (avoids Hindi/local script in India). */
+const GOOGLE_LANGUAGE = 'en';
 
 function isConfigured() {
   return Boolean(GOOGLE_API_KEY.trim());
@@ -86,6 +88,7 @@ async function autocomplete(query, biasCity) {
   const url = new URL('https://maps.googleapis.com/maps/api/place/autocomplete/json');
   url.searchParams.set('input', input);
   url.searchParams.set('components', 'country:in');
+  url.searchParams.set('language', GOOGLE_LANGUAGE);
   url.searchParams.set('key', GOOGLE_API_KEY);
 
   const data = await googleGet(url.toString());
@@ -118,6 +121,7 @@ async function placeDetails(googlePlaceId) {
     'fields',
     'place_id,geometry,address_components,formatted_address,name',
   );
+  url.searchParams.set('language', GOOGLE_LANGUAGE);
   url.searchParams.set('key', GOOGLE_API_KEY);
 
   const data = await googleGet(url.toString());
@@ -150,6 +154,7 @@ async function reverseGeocode(lat, lon) {
 
   const url = new URL('https://maps.googleapis.com/maps/api/geocode/json');
   url.searchParams.set('latlng', `${lat},${lon}`);
+  url.searchParams.set('language', GOOGLE_LANGUAGE);
   url.searchParams.set('key', GOOGLE_API_KEY);
 
   const data = await googleGet(url.toString());

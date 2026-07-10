@@ -1,5 +1,6 @@
 // controllers/mobile/orderController.js
 // Mobile order controller — same logic, mobile-friendly response shape.
+const { COD_MATERIALS_ONLINE_ONLY_MESSAGE } = require('../../constants/checkoutPayment');
 const CustomerOrder = require('../../models/CustomerOrder');
 const CustomerCart = require('../../models/CustomerCart');
 const Item = require('../../models/Item');
@@ -45,6 +46,10 @@ const createOrder = async (req, res) => {
     const { items, deliveryAddress, paymentMethod, couponCode, walletCreditsUsed = 0 } = req.body;
     if (!items?.length || !deliveryAddress || !paymentMethod)
       return res.status(400).json({ success: false, message: 'items, deliveryAddress and paymentMethod are required' });
+
+    if (String(paymentMethod).toLowerCase() === 'cod') {
+      return res.status(400).json({ success: false, message: COD_MATERIALS_ONLINE_ONLY_MESSAGE });
+    }
 
     let subtotal = 0;
     for (const item of items) {

@@ -6,6 +6,7 @@ const {
   markCustomerCouponUsed,
 } = require('../../services/couponService');
 const { assertStandaloneEliteBody } = require('../../services/eliteService');
+const { notifyBookingConfirmed } = require('../../services/pushNotificationService');
 
 /** Map checkout-style body (deliveryAddress, paymentMethod, items) into addBooking shape. */
 function normalizeCreateBookingBody(body, customerId) {
@@ -45,6 +46,7 @@ const createBooking = async (req, res) => {
     if (couponCode) {
       await markCustomerCouponUsed({ customerId: req.customerId, couponCode });
     }
+    void notifyBookingConfirmed(req.customerId, booking);
     res.status(201).json({ success: true, booking });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });

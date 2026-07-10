@@ -11,6 +11,7 @@ const {
   initBookingOnlinePayment,
   confirmBookingOnlinePayment,
 } = require('../../services/bookingPaymentService');
+const { notifyBookingConfirmed } = require('../../services/pushNotificationService');
 
 function isOnlinePaymentMethod(body) {
   const method = String(body.paymentMethod || body.payment?.method || '').toLowerCase();
@@ -63,6 +64,7 @@ const createBooking = async (req, res) => {
         razorpaySignature,
         couponCode,
       });
+      void notifyBookingConfirmed(req.customerId, booking);
       return res.json({ success: true, booking });
     }
 
@@ -93,6 +95,7 @@ const createBooking = async (req, res) => {
         couponCode,
       });
     }
+    void notifyBookingConfirmed(req.customerId, booking);
     res.status(201).json({ success: true, booking });
   } catch (error) {
     res.status(error.status || 400).json({ success: false, message: error.message });
@@ -257,6 +260,7 @@ const confirmPayment = async (req, res) => {
       razorpaySignature,
       couponCode,
     });
+    void notifyBookingConfirmed(req.customerId, booking);
     res.json({ success: true, booking });
   } catch (error) {
     res.status(error.status || 400).json({ success: false, message: error.message });

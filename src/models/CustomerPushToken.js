@@ -1,6 +1,6 @@
 // models/CustomerPushToken.js
-// FCM device tokens per customer — used by push notification service.
-// One record per device. Replaced on token refresh.
+// Expo push tokens per customer (ExponentPushToken[...]) — used by pushNotificationService.
+// One record per device. Upserted on register / refresh.
 
 const mongoose = require('mongoose');
 const { Types } = mongoose;

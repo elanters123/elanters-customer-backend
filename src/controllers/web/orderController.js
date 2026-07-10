@@ -3,6 +3,7 @@ const CustomerCart = require('../../models/CustomerCart');
 const Booking = require('../../models/Booking');
 const { buildMaterialsFromLineItems } = require('../../services/bookingService');
 const { assertStandaloneEliteBody } = require('../../services/eliteService');
+const { COD_MATERIALS_ONLINE_ONLY_MESSAGE } = require('../../constants/checkoutPayment');
 require('../../models/Gardener');
 const { createRazorpayInstance } = require('../../config/razorpay');
 
@@ -94,6 +95,10 @@ const createOrder = async (req, res) => {
     const { items, deliveryAddress, paymentMethod, couponCode, walletCreditsUsed = 0 } = req.body;
     if (!items?.length || !deliveryAddress || !paymentMethod)
       return res.status(400).json({ success: false, message: 'items, deliveryAddress and paymentMethod are required' });
+
+    if (String(paymentMethod).toLowerCase() === 'cod') {
+      return res.status(400).json({ success: false, message: COD_MATERIALS_ONLINE_ONLY_MESSAGE });
+    }
 
     let enrichedItems;
     let subtotal;

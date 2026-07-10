@@ -19,6 +19,8 @@ const standalone = {
   villa: process.env.GARDENER_SKU_VILLA_VISIT || "6936b3a7b24bb1fdff979722",
 };
 
+const grass10_50 = process.env.GARDENER_SKU_GRASS_10_50 || "6936b3a7b24bb1fdff979734";
+
 /** Lawn sqft bands — order matches web GRASS_AREA_BANDS */
 const grassBands = [
   process.env.GARDENER_SKU_GRASS_0_100 || "6936b3a7b24bb1fdff979736",
@@ -34,6 +36,7 @@ module.exports = {
   potBand,
   repot,
   standalone,
+  grass10_50,
   grassBands,
   GRASS_AREA_ORDER,
 };

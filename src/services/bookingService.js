@@ -45,7 +45,17 @@ async function buildMaterialsFromLineItems(items) {
 
 async function addBooking(bookingData) {
   try {
+    const hasPreResolvedItems =
+      Array.isArray(bookingData.items) &&
+      bookingData.items.length > 0 &&
+      bookingData.scheduledDateTime &&
+      bookingData.serviceType;
+
     if (bookingData.gardener && typeof bookingData.gardener === "object") {
+      if (hasPreResolvedItems) {
+        delete bookingData.gardener;
+        delete bookingData.catalogItems;
+      } else {
       const expanded = expandGardenerBooking(bookingData.gardener);
       const topNotes = bookingData.notes ? String(bookingData.notes).trim() : "";
       const exNotes = expanded.notes ? String(expanded.notes).trim() : "";
@@ -77,6 +87,7 @@ async function addBooking(bookingData) {
       });
       const merged = [topNotes, exNotes].filter(Boolean).join("\n");
       if (merged) bookingData.notes = merged;
+      }
     }
 
     const hasLineItems =

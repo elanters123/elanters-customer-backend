@@ -1,24 +1,52 @@
 const { potBand, repot, standalone, grassBands, GRASS_AREA_ORDER } = require("../config/gardenerSkuMap");
 
-const MIN_BOOKING_LEAD_HOURS = 3;
-
-function assertSlotStartsAtLeastHoursAhead(serviceDateYmd, hour, leadHours = MIN_BOOKING_LEAD_HOURS) {
-  const [y, mo, d] = String(serviceDateYmd).split("-").map(Number);
-  if (!y || !mo || !d) throw new Error("gardener.serviceDate must be YYYY-MM-DD");
-  const slotStart = new Date(y, mo - 1, d, hour, 0, 0, 0);
-  const earliest = Date.now() + leadHours * 60 * 60 * 1000;
-  if (slotStart.getTime() < earliest) {
-    throw new Error(
-      `Booking must be made at least ${leadHours} hours before the visit time slot starts`,
-    );
-  }
-}
+/** Slot stays bookable until this many hours before the window ends. */
+const SLOT_BOOKING_CUTOFF_HOURS_BEFORE_END = 1;
 
 const HOME_VILLA_SLOT_TO_BACKEND = {
   "9-12": "9am-12pm",
   "12-15": "12pm-3pm",
   "15-18": "3pm-6pm",
 };
+
+const HOME_VILLA_SLOT_END_HOUR = {
+  "9-12": 12,
+  "12-15": 15,
+  "15-18": 18,
+};
+
+function slotWindowEndHourFromStart(startHour) {
+  const h = Number(startHour);
+  if (!Number.isFinite(h)) return 12;
+  if (h < 12) return 12;
+  if (h < 15) return 15;
+  if (h < 18) return 18;
+  return 21;
+}
+
+/**
+ * A slot remains available until 1 hour before its end time.
+ * @param {string} serviceDateYmd
+ * @param {number} endHour local hour when the slot window ends
+ * @param {number} [cutoffHoursBeforeEnd]
+ */
+function assertSlotBookableUntilCutoffBeforeEnd(
+  serviceDateYmd,
+  endHour,
+  cutoffHoursBeforeEnd = SLOT_BOOKING_CUTOFF_HOURS_BEFORE_END,
+) {
+  const [y, mo, d] = String(serviceDateYmd).split("-").map(Number);
+  if (!y || !mo || !d) throw new Error("gardener.serviceDate must be YYYY-MM-DD");
+  const slotEnd = new Date(y, mo - 1, d, endHour, 0, 0, 0);
+  const cutoff = slotEnd.getTime() - cutoffHoursBeforeEnd * 60 * 60 * 1000;
+  if (Date.now() >= cutoff) {
+    throw new Error(
+      `This time slot can only be booked until ${cutoffHoursBeforeEnd} hour${
+        cutoffHoursBeforeEnd === 1 ? "" : "s"
+      } before it ends`,
+    );
+  }
+}
 
 function mapGrassSlotKeyToBackend(slotKey) {
   const h = parseInt(String(slotKey), 10);
@@ -35,6 +63,11 @@ function homeVillaStartHour(slotKey) {
   return 9;
 }
 
+function homeVillaEndHour(slotKey) {
+  if (HOME_VILLA_SLOT_END_HOUR[slotKey] != null) return HOME_VILLA_SLOT_END_HOUR[slotKey];
+  return slotWindowEndHourFromStart(homeVillaStartHour(slotKey));
+}
+
 /**
  * Accepts PDP keys (`9-12`), `HH:MM`, or a single hour number (string).
  */
@@ -44,6 +77,7 @@ function normalizeHomeVillaSlot(slotKey) {
     return {
       timeSlot: HOME_VILLA_SLOT_TO_BACKEND[s],
       hour: homeVillaStartHour(s),
+      endHour: homeVillaEndHour(s),
     };
   }
   const clock = s.match(/^(\d{1,2}):(\d{2})/);
@@ -51,13 +85,21 @@ function normalizeHomeVillaSlot(slotKey) {
     let hh = parseInt(clock[1], 10);
     if (/pm/i.test(s) && hh < 12) hh += 12;
     if (/am/i.test(s) && hh === 12) hh = 0;
-    return { timeSlot: mapGrassSlotKeyToBackend(String(hh)), hour: hh };
+    return {
+      timeSlot: mapGrassSlotKeyToBackend(String(hh)),
+      hour: hh,
+      endHour: slotWindowEndHourFromStart(hh),
+    };
   }
   const h = parseInt(s, 10);
   if (Number.isFinite(h)) {
-    return { timeSlot: mapGrassSlotKeyToBackend(String(h)), hour: h };
+    return {
+      timeSlot: mapGrassSlotKeyToBackend(String(h)),
+      hour: h,
+      endHour: slotWindowEndHourFromStart(h),
+    };
   }
-  return { timeSlot: "9am-12pm", hour: 9 };
+  return { timeSlot: "9am-12pm", hour: 9, endHour: 12 };
 }
 
 function toLocalDateISO(serviceDateYmd, hour) {
@@ -91,7 +133,15 @@ function expandGardenerBooking(g) {
   const descriptionParts = [];
   let notes = g.notes && String(g.notes).trim() ? String(g.notes).trim() : "";
 
-  if (flow === "home") {
+  if (Array.isArray(g.lineItems) && g.lineItems.length > 0) {
+    for (const line of g.lineItems) {
+      if (!line || !line.productId) {
+        throw new Error("gardener.lineItems entries require productId and quantity");
+      }
+      const qty = Math.max(1, Number(line.quantity) || 1);
+      items.push({ productId: String(line.productId), quantity: qty });
+    }
+  } else if (flow === "home") {
     const h = g.home || {};
     const tier = h.potTierId;
     if (!tier) throw new Error("gardener.home.potTierId is required when flow is home");
@@ -102,39 +152,75 @@ function expandGardenerBooking(g) {
     const rl = Math.max(0, Number(h.repotLarge) || 0);
     if (rs > 0) items.push({ productId: repot.upto12, quantity: rs });
     if (rl > 0) items.push({ productId: repot.above12, quantity: rl });
-    const { timeSlot, hour } = normalizeHomeVillaSlot(slotKey);
-    assertSlotStartsAtLeastHoursAhead(serviceDate, hour);
-    scheduledDateTime = { date: toLocalDateISO(serviceDate, hour), timeSlot };
     descriptionParts.push(`Home gardener (${tier} pots band)`);
-    if (h.fertilizerFromGardener) {
-      notes = [notes, "Fertiliser: gardener may bring (as per use)"].filter(Boolean).join("\n");
-    }
   } else if (flow === "villa") {
-    items.push({ productId: standalone.villa, quantity: 1 });
-    const { timeSlot, hour } = normalizeHomeVillaSlot(slotKey);
-    assertSlotStartsAtLeastHoursAhead(serviceDate, hour);
-    scheduledDateTime = { date: toLocalDateISO(serviceDate, hour), timeSlot };
-    descriptionParts.push("Villa / independent house gardener visit");
+    const v = g.villa || {};
+    const tier = v.potTierId;
+    if (!tier) throw new Error("gardener.villa.potTierId is required when flow is villa");
+    const visitId = potBand[tier];
+    if (!visitId) throw new Error(`Unknown gardener.villa.potTierId: ${tier}`);
+    items.push({ productId: visitId, quantity: 1 });
+    const rs = Math.max(0, Number(v.repotSmall) || 0);
+    const rl = Math.max(0, Number(v.repotLarge) || 0);
+    if (rs > 0) items.push({ productId: repot.upto12, quantity: rs });
+    if (rl > 0) items.push({ productId: repot.above12, quantity: rl });
+    descriptionParts.push(`Villa gardener (${tier} pots band)`);
   } else if (flow === "grass") {
     const grass = g.grass || {};
     const idx = grassAreaIndex(grass.areaBandId);
     const pid = grassBands[idx] || grassBands[0];
     items.push({ productId: pid, quantity: 1 });
+    descriptionParts.push("Grass cutting / lawn service");
+  } else {
+    throw new Error(`Unknown gardener.flow: ${flow} (use home | villa | grass)`);
+  }
+
+  if (flow === "home") {
+    const h = g.home || {};
+    const tier = h.potTierId || "—";
+    const { timeSlot, hour, endHour } = normalizeHomeVillaSlot(slotKey);
+    assertSlotBookableUntilCutoffBeforeEnd(serviceDate, endHour);
+    scheduledDateTime = { date: toLocalDateISO(serviceDate, hour), timeSlot };
+    if (!descriptionParts.length) descriptionParts.push(`Home gardener (${tier} pots band)`);
+    if (h.fertilizerFromGardener) {
+      notes = [notes, "Fertiliser: gardener may bring (as per use)"].filter(Boolean).join("\n");
+    }
+  } else if (flow === "villa") {
+    const v = g.villa || {};
+    const tier = v.potTierId || "—";
+    const { timeSlot, hour, endHour } = normalizeHomeVillaSlot(slotKey);
+    assertSlotBookableUntilCutoffBeforeEnd(serviceDate, endHour);
+    scheduledDateTime = { date: toLocalDateISO(serviceDate, hour), timeSlot };
+    if (!descriptionParts.length) descriptionParts.push(`Villa gardener (${tier} pots band)`);
+    if (v.fertilizerFromGardener) {
+      notes = [notes, "Fertiliser: gardener may bring (as per use)"].filter(Boolean).join("\n");
+    }
+  } else if (flow === "grass") {
     const clock = String(slotKey).match(/^(\d{1,2}):(\d{2})/);
     let hour = 9;
-    if (clock) {
-      hour = parseInt(clock[1], 10);
-      const t = String(slotKey);
-      if (/pm/i.test(t) && hour < 12) hour += 12;
-      if (/am/i.test(t) && hour === 12) hour = 0;
+    if (HOME_VILLA_SLOT_TO_BACKEND[String(slotKey).trim()]) {
+      const normalized = normalizeHomeVillaSlot(slotKey);
+      hour = normalized.hour;
+      assertSlotBookableUntilCutoffBeforeEnd(serviceDate, normalized.endHour);
+      scheduledDateTime = {
+        date: toLocalDateISO(serviceDate, hour),
+        timeSlot: normalized.timeSlot,
+      };
     } else {
-      const hourRaw = parseInt(String(slotKey), 10);
-      hour = Number.isFinite(hourRaw) ? hourRaw : 9;
+      if (clock) {
+        hour = parseInt(clock[1], 10);
+        const t = String(slotKey);
+        if (/pm/i.test(t) && hour < 12) hour += 12;
+        if (/am/i.test(t) && hour === 12) hour = 0;
+      } else {
+        const hourRaw = parseInt(String(slotKey), 10);
+        hour = Number.isFinite(hourRaw) ? hourRaw : 9;
+      }
+      const timeSlot = mapGrassSlotKeyToBackend(String(hour));
+      assertSlotBookableUntilCutoffBeforeEnd(serviceDate, slotWindowEndHourFromStart(hour));
+      scheduledDateTime = { date: toLocalDateISO(serviceDate, hour), timeSlot };
     }
-    const timeSlot = mapGrassSlotKeyToBackend(String(hour));
-    assertSlotStartsAtLeastHoursAhead(serviceDate, hour);
-    scheduledDateTime = { date: toLocalDateISO(serviceDate, hour), timeSlot };
-    descriptionParts.push("Grass cutting / lawn service");
+    if (!descriptionParts.length) descriptionParts.push("Grass cutting / lawn service");
   } else {
     throw new Error(`Unknown gardener.flow: ${flow} (use home | villa | grass)`);
   }
