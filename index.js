@@ -48,6 +48,9 @@ const connectDB = async () => {
     logger.info('Connecting to MongoDB...', 'Database');
     await mongoose.connect(process.env.MONGO_URI);
     logger.success('MongoDB connected', 'Database');
+    // Catch gardener assign / complete / cancel even when written by admin panel
+    const { startBookingPushWatcher } = require('./src/services/bookingPushWatcher');
+    startBookingPushWatcher();
   } catch (error) {
     logger.error('MongoDB connection failed', 'Database', error);
     process.exit(1);

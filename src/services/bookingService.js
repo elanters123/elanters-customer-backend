@@ -438,6 +438,12 @@ async function updateToPending(bookingId, userId) {
   booking.history.lastModifiedAt = new Date();
 
   const updatedBooking = await booking.save();
+  try {
+    const { notifyGardenerAssigned } = require('./pushNotificationService');
+    void notifyGardenerAssigned(updatedBooking.customer?.id, updatedBooking);
+  } catch (_) {
+    /* push optional */
+  }
   return updatedBooking;
 }
 
@@ -522,6 +528,13 @@ async function updateToCompleted(bookingId, userId, paymentData) {
     // Save the updated booking
     const updatedBooking = await booking.save();
 
+    try {
+      const { notifyBookingCompleted } = require('./pushNotificationService');
+      void notifyBookingCompleted(updatedBooking.customer?.id, updatedBooking);
+    } catch (_) {
+      /* push optional */
+    }
+
     // Return success response
     return {
       success: true,
@@ -601,6 +614,12 @@ async function updateToCancelled(bookingId, userId, cancellationData = {}) {
     // Save the updated booking
     const updatedBooking = await booking.save();
     console.log("updated booking data :"+ updatedBooking);
+    try {
+      const { notifyBookingCanceled } = require('./pushNotificationService');
+      void notifyBookingCanceled(updatedBooking.customer?.id, updatedBooking);
+    } catch (_) {
+      /* push optional */
+    }
     response.status = true;
     response.message = "Booking cancelled successfully";
     response.data = updatedBooking;

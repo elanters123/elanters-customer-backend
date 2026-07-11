@@ -2,8 +2,64 @@
 // Sends Expo push notifications to registered customer devices.
 
 const CustomerPushToken = require('../models/CustomerPushToken');
+const BookingPushReceipt = require('../models/BookingPushReceipt');
 
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
+
+function formatWhen(booking) {
+  const dateRaw = booking?.scheduledDateTime?.date || booking?.scheduledDate;
+  const date = dateRaw
+    ? new Date(dateRaw).toLocaleDateString('en-IN', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+      })
+    : '';
+  const slot = booking?.scheduledDateTime?.timeSlot || booking?.timeSlot || booking?.slotLabel || '';
+  return [date, slot].filter(Boolean).join(' · ');
+}
+
+function bookingIdOf(booking) {
+  return String(booking?._id || booking?.id || '');
+}
+
+function customerIdOf(booking, fallback) {
+  return fallback || booking?.customer?.id || booking?.customerId || null;
+}
+
+const BOOKING_PUSH = {
+  confirmed: {
+    title: 'Booking confirmed',
+    body: (booking) => {
+      const when = formatWhen(booking);
+      return when
+        ? `Your gardener visit is confirmed for ${when}.`
+        : 'Your gardener visit is confirmed.';
+    },
+  },
+  assigned: {
+    title: 'Gardener assigned',
+    body: (booking) => {
+      const when = formatWhen(booking);
+      return when
+        ? `A gardener has been assigned for your visit on ${when}.`
+        : 'A gardener has been assigned to your booking.';
+    },
+  },
+  completed: {
+    title: 'Visit completed',
+    body: () => 'Your gardener visit is done. Thank you for choosing Elanters.',
+  },
+  canceled: {
+    title: 'Booking canceled',
+    body: (booking) => {
+      const when = formatWhen(booking);
+      return when
+        ? `Your gardener visit on ${when} has been canceled.`
+        : 'Your gardener visit has been canceled.';
+    },
+  },
+};
 
 /**
  * @param {string|import('mongoose').Types.ObjectId} customerId
@@ -26,6 +82,7 @@ async function sendPushToCustomer(customerId, { title, body, data = {} }) {
     body,
     data,
     channelId: 'default',
+    priority: 'high',
   }));
 
   const response = await fetch(EXPO_PUSH_URL, {
@@ -58,36 +115,61 @@ async function sendPushToCustomer(customerId, { title, body, data = {} }) {
   return { sent: messages.length, tickets };
 }
 
-async function notifyBookingConfirmed(customerId, booking) {
-  const dateRaw = booking?.scheduledDateTime?.date || booking?.scheduledDate;
-  const date = dateRaw
-    ? new Date(dateRaw).toLocaleDateString('en-IN', {
-        day: 'numeric',
-        month: 'short',
-        year: 'numeric',
-      })
-    : '';
-  const slot = booking?.scheduledDateTime?.timeSlot || booking?.timeSlot || booking?.slotLabel || '';
-  const when = [date, slot].filter(Boolean).join(' · ');
-
+async function claimPushReceipt(bookingId, kind) {
+  if (!bookingId || !kind) return false;
   try {
-    await sendPushToCustomer(customerId, {
-      title: 'Booking confirmed',
-      body: when
-        ? `Your gardener visit is confirmed for ${when}.`
-        : 'Your gardener visit is confirmed.',
+    await BookingPushReceipt.create({ bookingId, kind });
+    return true;
+  } catch (err) {
+    if (err?.code === 11000) return false; // already sent
+    throw err;
+  }
+}
+
+async function notifyBookingEvent(customerId, booking, kind) {
+  const tpl = BOOKING_PUSH[kind];
+  if (!tpl) return;
+  const id = bookingIdOf(booking);
+  try {
+    const claimed = await claimPushReceipt(id, kind);
+    if (!claimed) return;
+
+    await sendPushToCustomer(customerIdOf(booking, customerId), {
+      title: tpl.title,
+      body: tpl.body(booking),
       data: {
         screen: 'booking',
-        bookingId: String(booking?._id || booking?.id || ''),
-        id: String(booking?._id || booking?.id || ''),
+        bookingId: id,
+        id,
+        type: kind,
       },
     });
   } catch (err) {
-    console.warn('[push] notifyBookingConfirmed failed:', err?.message || err);
+    console.warn(`[push] notifyBookingEvent(${kind}) failed:`, err?.message || err);
   }
+}
+
+async function notifyBookingConfirmed(customerId, booking) {
+  return notifyBookingEvent(customerId, booking, 'confirmed');
+}
+
+async function notifyGardenerAssigned(customerId, booking) {
+  return notifyBookingEvent(customerId, booking, 'assigned');
+}
+
+async function notifyBookingCompleted(customerId, booking) {
+  return notifyBookingEvent(customerId, booking, 'completed');
+}
+
+async function notifyBookingCanceled(customerId, booking) {
+  return notifyBookingEvent(customerId, booking, 'canceled');
 }
 
 module.exports = {
   sendPushToCustomer,
+  notifyBookingEvent,
   notifyBookingConfirmed,
+  notifyGardenerAssigned,
+  notifyBookingCompleted,
+  notifyBookingCanceled,
 };
