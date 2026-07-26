@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
+const { Schema, Types } = mongoose;
 
-const itemSchema = new mongoose.Schema({
+const itemSchema = new Schema({
     name: {
         type: String,
         required: true,
@@ -41,7 +42,10 @@ const itemSchema = new mongoose.Schema({
         required: true,
         min: 0,
     },
-    images: [String]
+    /** Legacy inline URLs / data-URIs (kept for backward compatibility). */
+    images: [String],
+    /** Shared media refs → product_images collection (preferred). */
+    imageIds: [{ type: Types.ObjectId, ref: 'ProductImage' }],
 }, {
     timestamps: true
 });

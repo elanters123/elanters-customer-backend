@@ -72,6 +72,9 @@ app.use(`${BASE}/web/service-reviews`, secretTokenMiddleware, require('./src/rou
 app.use(`${BASE}/web/product-reviews`, secretTokenMiddleware, require('./src/routes/web/productReviews'));
 app.use(`${BASE}/web/address`,         secretTokenMiddleware, require('./src/routes/web/address'));
 
+// ─── Public media (no secret-token — used by <img> / expo-image) ──────────────
+app.use(`${BASE}/media`, cors({ origin: '*' }), require('./src/routes/media'));
+
 // ─── Mobile Routes ────────────────────────────────────────────────────────────
 app.use(`${BASE}/mobile/auth`,     secretTokenMiddleware, require('./src/routes/mobile/auth'));
 app.use(`${BASE}/mobile/profile`,  secretTokenMiddleware, require('./src/routes/mobile/profile'));

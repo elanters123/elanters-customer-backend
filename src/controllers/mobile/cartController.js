@@ -1,12 +1,19 @@
-// controllers/web/cartController.js
+// controllers/mobile/cartController.js
 const CustomerCart = require('../../models/CustomerCart');
 const Item = require('../../models/Item');
+const { attachResolvedImagesToCart } = require('../../services/productImageService');
 
 const getCart = async (req, res) => {
   try {
-    const cart = await CustomerCart.findOne({ customerId: req.customerId })
-      .populate('items.productId', 'name price images offer stock');
-    res.json({ success: true, cart: cart || { items: [], couponCode: null, couponDiscount: 0 } });
+    const cart = await CustomerCart.findOne({ customerId: req.customerId }).populate(
+      'items.productId',
+      'name price images imageIds offer stock'
+    );
+    if (!cart) {
+      return res.json({ success: true, cart: { items: [], couponCode: null, couponDiscount: 0 } });
+    }
+    const resolved = await attachResolvedImagesToCart(cart, req);
+    res.json({ success: true, cart: resolved });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -35,7 +42,12 @@ const addToCart = async (req, res) => {
     }
 
     await cart.save();
-    res.json({ success: true, cart });
+    const populated = await CustomerCart.findById(cart._id).populate(
+      'items.productId',
+      'name price images imageIds offer stock'
+    );
+    const resolved = await attachResolvedImagesToCart(populated, req);
+    res.json({ success: true, cart: resolved });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -61,7 +73,12 @@ const updateCartItem = async (req, res) => {
     }
 
     await cart.save();
-    res.json({ success: true, cart });
+    const populated = await CustomerCart.findById(cart._id).populate(
+      'items.productId',
+      'name price images imageIds offer stock'
+    );
+    const resolved = await attachResolvedImagesToCart(populated, req);
+    res.json({ success: true, cart: resolved });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

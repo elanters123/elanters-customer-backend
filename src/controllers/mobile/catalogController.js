@@ -3,6 +3,7 @@ const Item = require('../../models/Item');
 const PincodeAvailability = require('../../models/PincodeAvailability');
 const CustomerWishlist = require('../../models/CustomerWishlist');
 const productReviewService = require('../../services/productReviewService');
+const { attachResolvedImages } = require('../../services/productImageService');
 
 function attachReviewSummary(item, summaries) {
   const plain = item.toObject ? item.toObject() : item;
@@ -24,7 +25,8 @@ const getProducts = async (req, res) => {
       .select('-__v');
 
     const summaries = await productReviewService.getSummariesForProductIds(items.map((i) => i._id));
-    const enriched = items.map((item) => attachReviewSummary(item, summaries));
+    let enriched = items.map((item) => attachReviewSummary(item, summaries));
+    enriched = await attachResolvedImages(enriched, req);
 
     const total = await Item.countDocuments(query);
     res.json({ success: true, items: enriched, total, page: Number(page), limit: Number(limit) });
@@ -41,14 +43,13 @@ const getProductById = async (req, res) => {
     const { summary, reviews } = await productReviewService.listProductReviews(req.params.id, {
       limit: 50,
     });
-    const plain = item.toObject();
+    const [plain] = await attachResolvedImages(
+      [{ ...item.toObject(), avgRating: summary.avgRating, reviewCount: summary.reviewCount }],
+      req
+    );
     res.json({
       success: true,
-      item: {
-        ...plain,
-        avgRating: summary.avgRating,
-        reviewCount: summary.reviewCount,
-      },
+      item: plain,
       reviews,
     });
   } catch (error) {
@@ -75,9 +76,10 @@ const getWishlist = async (req, res) => {
   try {
     const wishlist = await CustomerWishlist.findOne({ customerId: req.customerId }).populate(
       'productIds',
-      'name price images offer'
+      'name price images imageIds offer'
     );
-    res.json({ success: true, products: wishlist?.productIds || [] });
+    const products = await attachResolvedImages(wishlist?.productIds || [], req);
+    res.json({ success: true, products });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
