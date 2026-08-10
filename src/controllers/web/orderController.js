@@ -6,6 +6,7 @@ const { assertStandaloneEliteBody } = require('../../services/eliteService');
 const { COD_MATERIALS_ONLINE_ONLY_MESSAGE } = require('../../constants/checkoutPayment');
 require('../../models/Gardener');
 const { createRazorpayInstance } = require('../../config/razorpay');
+const { notifyBookingConfirmed } = require('../../services/pushNotificationService');
 
 const getOrders = async (req, res) => {
   try {
@@ -220,6 +221,8 @@ const confirmPayment = async (req, res) => {
       { customerId: req.customerId },
       { $set: { items: [], couponCode: null } }
     );
+
+    void notifyBookingConfirmed(req.customerId, booking);
 
     res.json({ success: true, order: bookingToOrder(booking) });
   } catch (error) {

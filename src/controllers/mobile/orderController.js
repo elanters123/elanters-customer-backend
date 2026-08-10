@@ -3,11 +3,17 @@
 const { COD_MATERIALS_ONLINE_ONLY_MESSAGE } = require('../../constants/checkoutPayment');
 const CustomerOrder = require('../../models/CustomerOrder');
 const CustomerCart = require('../../models/CustomerCart');
-const Item = require('../../models/Item');
-const { createRazorpayInstance } = require('../../config/razorpay');
-const { markCustomerCouponUsed } = require('../../services/couponService');
+const {
+  createRazorpayInstance,
+  assertRazorpayConfigured,
+  formatRazorpayError,
+  getRazorpayKeyId,
+} = require('../../config/razorpay');
+const { markCustomerCouponUsed, validateCouponForCheckout } = require('../../services/couponService');
+const { buildMaterialsFromLineItems } = require('../../services/bookingService');
 const { assertStandaloneEliteBody } = require('../../services/eliteService');
 const crypto = require('crypto');
+const { notifyOrderConfirmed } = require('../../services/pushNotificationService');
 
 const getOrders = async (req, res) => {
   try {
@@ -47,39 +53,80 @@ const createOrder = async (req, res) => {
     if (!items?.length || !deliveryAddress || !paymentMethod)
       return res.status(400).json({ success: false, message: 'items, deliveryAddress and paymentMethod are required' });
 
-    if (String(paymentMethod).toLowerCase() === 'cod') {
+    const method = String(paymentMethod).toLowerCase();
+    if (method === 'cod') {
       return res.status(400).json({ success: false, message: COD_MATERIALS_ONLINE_ONLY_MESSAGE });
     }
 
-    let subtotal = 0;
-    for (const item of items) {
-      const product = await Item.findById(item.productId);
-      if (!product) return res.status(404).json({ success: false, message: `Product ${item.productId} not found` });
-      subtotal += product.price * item.quantity;
+    let subtotal;
+    let orderItems;
+    try {
+      const built = await buildMaterialsFromLineItems(items);
+      subtotal = built.subtotal;
+      orderItems = built.materials.map((m) => ({
+        productId: m.id,
+        name: m.name,
+        image: '',
+        quantity: m.quantity,
+        price: m.price,
+      }));
+    } catch (e) {
+      const status = /not found/i.test(e.message) ? 404 : 400;
+      return res.status(status).json({ success: false, message: e.message });
     }
 
     const deliveryFee = subtotal >= 500 ? 0 : 49;
-    const total = subtotal + deliveryFee - walletCreditsUsed;
+    let discount = 0;
+    if (couponCode) {
+      const coupon = await validateCouponForCheckout({
+        customerId: req.customerId,
+        code: couponCode,
+        totalAmount: subtotal + deliveryFee,
+      });
+      if (!coupon.ok) {
+        return res.status(coupon.status || 400).json({ success: false, message: coupon.message });
+      }
+      discount = coupon.discount;
+    }
 
+    const total = Math.max(0, subtotal + deliveryFee - walletCreditsUsed - discount);
+    if (total < 1) {
+      return res.status(400).json({
+        success: false,
+        message: 'Order total must be at least ₹1 for online payment.',
+      });
+    }
+
+    assertRazorpayConfigured();
     const razorpay = createRazorpayInstance();
-    const razorpayOrder = await razorpay.orders.create({
-      amount: Math.round(total * 100),
-      currency: 'INR',
-      receipt: `mob_order_${Date.now()}`,
-    });
+    let razorpayOrder;
+    try {
+      razorpayOrder = await razorpay.orders.create({
+        amount: Math.round(total * 100),
+        currency: 'INR',
+        receipt: `mob_order_${Date.now()}`,
+      });
+    } catch (rzpErr) {
+      const err = new Error(formatRazorpayError(rzpErr));
+      err.status = 503;
+      throw err;
+    }
+
+    const normalizedPaymentMethod =
+      method === 'online' || method === 'upi' ? 'upi' : paymentMethod;
 
     const order = await CustomerOrder.create({
       customerId: req.customerId,
-      items,
+      items: orderItems,
       deliveryAddress,
       subtotal,
       deliveryFee,
+      discount,
       total,
       couponCode: couponCode || null,
       walletCreditsUsed,
-      paymentMethod,
+      paymentMethod: normalizedPaymentMethod,
       razorpayOrderId: razorpayOrder.id,
-      ...(paymentMethod === 'cod' ? { paymentStatus: 'pending', status: 'confirmed' } : {}),
     });
 
     if (couponCode && paymentMethod === 'cod') {
@@ -90,12 +137,14 @@ const createOrder = async (req, res) => {
       success: true,
       orderId: order._id,
       razorpayOrderId: razorpayOrder.id,
-      razorpayKeyId: process.env.RAZORPAY_KEY_ID || process.env.RAZ_ID,
+      razorpayKeyId: getRazorpayKeyId(),
       amount: razorpayOrder.amount,
       currency: 'INR',
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    const status = error.status && Number.isFinite(error.status) ? error.status : 500;
+    const message = error.message || 'Failed to create order';
+    res.status(status).json({ success: false, message });
   }
 };
 
@@ -134,6 +183,8 @@ const confirmPayment = async (req, res) => {
     }
 
     await CustomerCart.findOneAndUpdate({ customerId: req.customerId }, { $set: { items: [], couponCode: null } });
+
+    void notifyOrderConfirmed(req.customerId, order);
 
     res.json({ success: true, message: 'Payment confirmed', orderId: order._id });
   } catch (error) {

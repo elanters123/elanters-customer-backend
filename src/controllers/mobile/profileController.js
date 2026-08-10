@@ -51,6 +51,9 @@ const registerPushToken = async (req, res) => {
       { customerId: req.customerId, token, platform },
       { upsert: true, new: true }
     );
+    console.log(
+      `[push] registered token customer=${String(req.customerId)} platform=${platform} token=${String(token).slice(0, 28)}…`,
+    );
     res.json({ success: true, message: 'Push token registered' });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
