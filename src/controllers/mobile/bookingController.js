@@ -27,7 +27,12 @@ function normalizeCreateBookingBody(body, customerId) {
     id: customerId,
     name: d.fullName || body.customer?.name || '',
     phone: d.phone || body.customer?.phone || '',
-    email: d.email || body.customer?.email || '',
+    email:
+      d.email ||
+      body.customer?.email ||
+      (d.phone || body.customer?.phone
+        ? `customer+${String(d.phone || body.customer?.phone).replace(/\D/g, '').slice(-10)}@elanters.app`
+        : ''),
   };
   const location = {
     address: d.line1 || '',
@@ -98,7 +103,17 @@ const createBooking = async (req, res) => {
     void notifyBookingConfirmed(req.customerId, booking);
     res.status(201).json({ success: true, booking });
   } catch (error) {
-    res.status(error.status || 400).json({ success: false, message: error.message });
+    const message =
+      error?.error?.description ||
+      error?.message ||
+      'Could not complete booking';
+    const status =
+      error?.status && Number.isFinite(error.status)
+        ? error.status
+        : error?.statusCode >= 500
+          ? 503
+          : 400;
+    res.status(status).json({ success: false, message });
   }
 };
 
@@ -107,6 +122,7 @@ const getMyBookings = async (req, res) => {
     const { status, page = 1, limit = 20 } = req.query;
     const query = { 'customer.id': req.customerId };
     if (status) query.status = status;
+    else query.status = { $ne: 'pending' };
 
     const bookings = await Booking.find(query)
       .sort({ 'history.createdAt': -1 })

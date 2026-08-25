@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 const Booking = require('../models/Booking');
 const Customer = require('../models/Customer');
-const { createRazorpayInstance, getRazorpayKeySecret, getRazorpayKeyId } = require('../config/razorpay');
+const { createRazorpayInstance, getRazorpayKeySecret, getRazorpayKeyId, assertRazorpayConfigured, formatRazorpayError } = require('../config/razorpay');
 const { markCustomerCouponUsed } = require('./couponService');
 const bookingService = require('./bookingService');
 
@@ -26,7 +26,12 @@ function normalizeCreateBookingBody(body, customerId) {
     id: customerId,
     name: d.fullName || body.customer?.name || '',
     phone: d.phone || body.customer?.phone || '',
-    email: d.email || body.customer?.email || '',
+    email:
+      d.email ||
+      body.customer?.email ||
+      (d.phone || body.customer?.phone
+        ? `customer+${String(d.phone || body.customer?.phone).replace(/\D/g, '').slice(-10)}@elanters.app`
+        : ''),
   };
   const location = {
     address: d.line1 || '',
@@ -49,21 +54,36 @@ async function initBookingOnlinePayment(customerId, body) {
   const bookingData = normalizeCreateBookingBody(body, customerId);
   if (body.couponCode) bookingData.couponCode = body.couponCode;
   bookingData.status = 'pending';
+  const pay = { ...(bookingData.payment || {}) };
+  delete pay.method;
   bookingData.payment = {
-    ...bookingData.payment,
-    method: 'online',
+    ...pay,
+    status: 'pending',
     prePaidAmount: 0,
   };
 
   const booking = await bookingService.addBooking(bookingData);
 
+  assertRazorpayConfigured();
   const razorpay = createRazorpayInstance();
   const amountPaise = Math.round(Number(booking.payment.totalAmount) * 100);
-  const razorpayOrder = await razorpay.orders.create({
-    amount: amountPaise,
-    currency: 'INR',
-    receipt: `mob_booking_${String(booking._id).slice(-12)}`,
-  });
+  if (!Number.isFinite(amountPaise) || amountPaise < 100) {
+    const err = new Error('Booking total must be at least ₹1 for online payment.');
+    err.status = 400;
+    throw err;
+  }
+  let razorpayOrder;
+  try {
+    razorpayOrder = await razorpay.orders.create({
+      amount: amountPaise,
+      currency: 'INR',
+      receipt: `mob_booking_${String(booking._id).slice(-12)}`,
+    });
+  } catch (rzpErr) {
+    const err = new Error(formatRazorpayError(rzpErr));
+    err.status = 503;
+    throw err;
+  }
 
   booking.eOrderId = razorpayOrder.id;
   await booking.save();
@@ -101,7 +121,8 @@ async function confirmBookingOnlinePayment(customerId, { razorpayOrderId, razorp
 
   booking.status = 'upcoming';
   booking.payment.status = 'paid';
-  booking.payment.method = booking.payment.method || 'online';
+  booking.payment.method = 'online';
+  booking.payment.prePaidAmount = Number(booking.payment.totalAmount) || 0;
   booking.payment.transactionId = razorpayPaymentId;
   booking.payment.paymentDate = new Date();
   await booking.save();

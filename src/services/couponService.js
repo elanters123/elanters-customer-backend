@@ -188,9 +188,45 @@ async function markCustomerCouponUsed({ customerId, couponCode }) {
   );
 }
 
+/** Build the Booking.coupon subdocument from a code sent by the customer app. */
+async function persistableCouponFromCode({
+  code,
+  amountBeforeDiscount,
+  chargedTotal,
+}) {
+  const normalized = normalizeCode(code);
+  if (!normalized) return null;
+
+  const coupon = await Coupon.findOne({ code: normalized });
+  let discount = 0;
+  if (coupon && Number.isFinite(Number(amountBeforeDiscount)) && amountBeforeDiscount > 0) {
+    const window = couponIsInDateWindow(coupon);
+    if (window.ok && amountBeforeDiscount >= (coupon.minPurchaseAmount || 0)) {
+      discount = (amountBeforeDiscount * (coupon.discountPercent || 0)) / 100;
+      if (coupon.maxDiscountAmount) discount = Math.min(discount, coupon.maxDiscountAmount);
+      discount = Math.round(discount);
+    }
+  }
+
+  const before = Number(amountBeforeDiscount);
+  const charged = Number(chargedTotal);
+  if (Number.isFinite(before) && Number.isFinite(charged)) {
+    const fromTotals = Math.max(0, Math.round(before - charged));
+    if (fromTotals > 0) discount = fromTotals;
+  }
+
+  return {
+    couponRef: coupon?._id || null,
+    code: coupon?.code || normalized,
+    discountAmount: discount,
+    appliedAt: new Date(),
+  };
+}
+
 module.exports = {
   assignCouponToCustomer,
   getActiveCouponsForCustomer,
   validateCouponForCheckout,
   markCustomerCouponUsed,
+  persistableCouponFromCode,
 };

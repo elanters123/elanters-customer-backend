@@ -12,7 +12,7 @@ const  sendOTP  = require('./otpService.js');
 const otpRequested = require("../models/otpRequested.js");
 const { expandGardenerBooking } = require("./gardenerBookingExpand.js");
 const { validateBookingImage } = require("../utils/bookingImage.js");
-const { rewardReferralOnFirstCompletion } = require("./referralService");
+const { persistableCouponFromCode } = require("./couponService");
 
 /**
  * Resolve cart lines to booking materials using live Item prices (same rules as web createOrder).
@@ -124,13 +124,15 @@ async function addBooking(bookingData) {
       throw new Error("location.coordinates.latitude and longitude are required (use 0 if unknown)");
     }
 
+    let computedTotal = 0;
     if (hasLineItems) {
       const { materials: resolvedMaterials, subtotal } = await buildMaterialsFromLineItems(
         bookingData.items
       );
       bookingData.materials = resolvedMaterials;
       const wallet = Math.max(0, Number(bookingData.walletCreditsUsed) || 0);
-      const computedTotal = Math.max(0, subtotal - wallet);
+      const eliteDiscount = Math.max(0, Number(bookingData.eliteDiscount) || 0);
+      computedTotal = Math.max(0, subtotal - wallet - eliteDiscount);
       const submitted = bookingData.payment.totalAmount;
       const couponCode = bookingData.couponCode || bookingData.coupon?.code;
       if (submitted !== undefined && submitted !== null && submitted !== "" && !couponCode) {
@@ -148,6 +150,24 @@ async function addBooking(bookingData) {
       };
       bookingData.description = resolvedMaterials.map((m) => m.name).join(", ");
     }
+
+    const couponCode = bookingData.couponCode || bookingData.coupon?.code;
+    const chargedTotal = Number(bookingData.payment?.totalAmount);
+    const amountBeforeDiscount = hasLineItems ? computedTotal : chargedTotal;
+    const couponToSave = couponCode
+      ? await persistableCouponFromCode({
+          code: couponCode,
+          amountBeforeDiscount,
+          chargedTotal,
+        })
+      : bookingData.coupon?.code
+        ? {
+            couponRef: bookingData.coupon.couponRef || null,
+            code: bookingData.coupon.code,
+            discountAmount: bookingData.coupon.discountAmount || 0,
+            appliedAt: bookingData.coupon.appliedAt || new Date(),
+          }
+        : undefined;
 
     // payment.totalAmount
     if (!bookingData.payment.totalAmount || bookingData.payment.totalAmount === 0) {
@@ -188,10 +208,11 @@ async function addBooking(bookingData) {
       materials,
       payment: {
         totalAmount: bookingData.payment.totalAmount,
-        status: "pending",
+        status: bookingData.payment.status || "pending",
         prePaidAmount: bookingData.payment.prePaidAmount || 0,
         method: bookingData.payment.method || undefined,
       },
+      ...(couponToSave ? { coupon: couponToSave } : {}),
       notes: bookingData.notes || undefined,
       assignee: { type: "admin", gardenerRef: null },
       history: {

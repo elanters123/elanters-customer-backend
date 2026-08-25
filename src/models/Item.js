@@ -46,6 +46,16 @@ const itemSchema = new Schema({
     images: [String],
     /** Shared media refs → product_images collection (preferred). */
     imageIds: [{ type: Types.ObjectId, ref: 'ProductImage' }],
+    /**
+     * Who can see this item in catalog surfaces.
+     * both (default) | customer | gardener | none
+     */
+    visibility: {
+        type: String,
+        enum: ['both', 'customer', 'gardener', 'none'],
+        default: 'both',
+        index: true,
+    },
 }, {
     timestamps: true
 });

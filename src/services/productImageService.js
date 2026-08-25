@@ -9,12 +9,25 @@ function servicePrefix() {
 
 /** Public API base used to build media URLs for clients (Image / <img src>). */
 function publicApiBase(req) {
-  const fromEnv = (process.env.PUBLIC_API_URL || process.env.API_PUBLIC_BASE || '').replace(/\/$/, '');
-  if (fromEnv) return fromEnv;
-
   const proto = (req?.get?.('x-forwarded-proto') || req?.protocol || 'http').split(',')[0].trim();
   const host = (req?.get?.('x-forwarded-host') || req?.get?.('host') || 'localhost').split(',')[0].trim();
-  return `${proto}://${host}/${servicePrefix()}/api`;
+  const fromRequest = `${proto}://${host}/${servicePrefix()}/api`;
+
+  const fromEnv = (process.env.PUBLIC_API_URL || process.env.API_PUBLIC_BASE || '').replace(/\/$/, '');
+  if (!fromEnv) return fromRequest;
+
+  // Prefer request host when env omitted the non-default port (common misconfig → broken images).
+  try {
+    const envUrl = new URL(fromEnv.includes('://') ? fromEnv : `${proto}://${fromEnv}`);
+    const reqHost = host.includes(':') ? host : `${host}`;
+    const reqPort = reqHost.includes(':') ? reqHost.split(':').pop() : '';
+    if (!envUrl.port && reqPort && reqPort !== '80' && reqPort !== '443') {
+      return fromRequest;
+    }
+  } catch {
+    /* keep env */
+  }
+  return fromEnv;
 }
 
 function mediaUrlForId(imageId, req) {
