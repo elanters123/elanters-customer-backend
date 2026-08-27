@@ -74,18 +74,16 @@ const createBooking = async (req, res) => {
     }
 
     if (isOnlinePaymentMethod(req.body)) {
-      const { booking, razorpayOrder, razorpayKeyId, prefill, couponCode } =
+      const { razorpayOrder, razorpayKeyId, prefill, couponCode, description } =
         await initBookingOnlinePayment(req.customerId, req.body);
       return res.status(201).json({
         success: true,
         needsPayment: true,
-        bookingId: booking._id,
-        booking,
         razorpayOrderId: razorpayOrder.id,
         razorpayKeyId,
         amount: razorpayOrder.amount,
         currency: razorpayOrder.currency || 'INR',
-        description: booking.description || 'Gardener booking',
+        description: description || 'Gardener booking',
         prefill,
         couponCode,
       });
@@ -243,16 +241,15 @@ const getBalconyPhoto = async (req, res) => {
 const initPayment = async (req, res) => {
   try {
     assertStandaloneEliteBody(req.body);
-    const { booking, razorpayOrder, razorpayKeyId, prefill, couponCode } =
+    const { razorpayOrder, razorpayKeyId, prefill, couponCode, description } =
       await initBookingOnlinePayment(req.customerId, req.body);
     res.status(201).json({
       success: true,
-      bookingId: booking._id,
       razorpayOrderId: razorpayOrder.id,
       razorpayKeyId,
       amount: razorpayOrder.amount,
       currency: razorpayOrder.currency || 'INR',
-      description: booking.description || 'Gardener booking',
+      description: description || 'Gardener booking',
       prefill,
       couponCode,
     });

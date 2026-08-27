@@ -7,6 +7,10 @@ const {
 } = require('../../services/couponService');
 const { assertStandaloneEliteBody } = require('../../services/eliteService');
 const { notifyBookingConfirmed } = require('../../services/pushNotificationService');
+const {
+  initBookingOnlinePayment,
+  confirmBookingOnlinePayment,
+} = require('../../services/bookingPaymentService');
 
 /** Map checkout-style body (deliveryAddress, paymentMethod, items) into addBooking shape. */
 function normalizeCreateBookingBody(body, customerId) {
@@ -37,9 +41,31 @@ function normalizeCreateBookingBody(body, customerId) {
   return { ...rest, customer, location, payment };
 }
 
+function isOnlinePaymentMethod(body) {
+  const m = String(body.paymentMethod || body.payment?.method || '').toLowerCase();
+  return m === 'online' || m === 'upi';
+}
+
 const createBooking = async (req, res) => {
   try {
     assertStandaloneEliteBody(req.body);
+
+    if (isOnlinePaymentMethod(req.body)) {
+      const { razorpayOrder, razorpayKeyId, prefill, couponCode, description } =
+        await initBookingOnlinePayment(req.customerId, req.body);
+      return res.status(201).json({
+        success: true,
+        needsPayment: true,
+        razorpayOrderId: razorpayOrder.id,
+        razorpayKeyId,
+        amount: razorpayOrder.amount,
+        currency: razorpayOrder.currency || 'INR',
+        description: description || 'Gardener booking',
+        prefill,
+        couponCode,
+      });
+    }
+
     const bookingData = normalizeCreateBookingBody(req.body, req.customerId);
     const booking = await bookingService.addBooking(bookingData);
     const couponCode = req.body.couponCode || req.body.coupon?.code;
@@ -49,7 +75,30 @@ const createBooking = async (req, res) => {
     void notifyBookingConfirmed(req.customerId, booking);
     res.status(201).json({ success: true, booking });
   } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
+    const status = error.status && Number.isFinite(error.status) ? error.status : 400;
+    res.status(status).json({ success: false, message: error.message });
+  }
+};
+
+const confirmPayment = async (req, res) => {
+  try {
+    const { razorpayOrderId, razorpayPaymentId, razorpaySignature, couponCode } = req.body;
+    if (!razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
+      return res.status(400).json({
+        success: false,
+        message: 'razorpayOrderId, razorpayPaymentId and razorpaySignature are required',
+      });
+    }
+    const booking = await confirmBookingOnlinePayment(req.customerId, {
+      razorpayOrderId,
+      razorpayPaymentId,
+      razorpaySignature,
+      couponCode,
+    });
+    void notifyBookingConfirmed(req.customerId, booking);
+    res.json({ success: true, booking });
+  } catch (error) {
+    res.status(error.status || 400).json({ success: false, message: error.message });
   }
 };
 
@@ -58,6 +107,7 @@ const getMyBookings = async (req, res) => {
     const { status, page = 1, limit = 10 } = req.query;
     const query = { 'customer.id': req.customerId };
     if (status) query.status = status;
+    else query.status = { $ne: 'pending' };
 
     const bookings = await Booking.find(query)
       .sort({ 'history.createdAt': -1 })
@@ -78,7 +128,7 @@ const getBookingById = async (req, res) => {
       _id: req.params.id,
       'customer.id': req.customerId,
     }).select('-__v -image');
-    if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
+    if (!booking) return res.status(404).json({ success: false, message: 'Order not found' });
     res.json({ success: true, booking });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -165,6 +215,7 @@ const getBalconyPhoto = async (req, res) => {
 
 module.exports = {
   createBooking,
+  confirmPayment,
   getMyBookings,
   getBookingById,
   cancelBooking,

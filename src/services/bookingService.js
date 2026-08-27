@@ -43,26 +43,25 @@ async function buildMaterialsFromLineItems(items) {
   return { materials, subtotal };
 }
 
-async function addBooking(bookingData) {
-  try {
-    const hasPreResolvedItems =
-      Array.isArray(bookingData.items) &&
-      bookingData.items.length > 0 &&
-      bookingData.scheduledDateTime &&
-      bookingData.serviceType;
+/**
+ * Expand gardener payload + price materials on a booking body (mutates bookingData).
+ * Does not persist. Used by addBooking and UPI init (quote before pay).
+ */
+async function resolveBookingLineItemsAndTotal(bookingData) {
+  const hasPreResolvedItems =
+    Array.isArray(bookingData.items) &&
+    bookingData.items.length > 0 &&
+    bookingData.scheduledDateTime &&
+    bookingData.serviceType;
 
-    if (bookingData.gardener && typeof bookingData.gardener === "object") {
-      if (hasPreResolvedItems) {
-        delete bookingData.gardener;
-        delete bookingData.catalogItems;
-      } else {
+  if (bookingData.gardener && typeof bookingData.gardener === "object") {
+    if (hasPreResolvedItems) {
+      delete bookingData.gardener;
+      delete bookingData.catalogItems;
+    } else {
       const expanded = expandGardenerBooking(bookingData.gardener);
       const topNotes = bookingData.notes ? String(bookingData.notes).trim() : "";
       const exNotes = expanded.notes ? String(expanded.notes).trim() : "";
-      /**
-       * Plants / catalog add-ons: prefer `catalogItems` when present so they are not confused
-       * with the expanded gardener `items` list; fall back to `items` (web/mobile send one or both).
-       */
       const fromCatalog = Array.isArray(bookingData.catalogItems) ? bookingData.catalogItems : [];
       const fromItems = Array.isArray(bookingData.items) ? bookingData.items : [];
       const extraRaw = fromCatalog.length > 0 ? fromCatalog : fromItems;
@@ -87,11 +86,56 @@ async function addBooking(bookingData) {
       });
       const merged = [topNotes, exNotes].filter(Boolean).join("\n");
       if (merged) bookingData.notes = merged;
+    }
+  }
+
+  const hasLineItems = Array.isArray(bookingData.items) && bookingData.items.length > 0;
+  let computedTotal = 0;
+  let amountBeforeDiscount = 0;
+
+  if (hasLineItems) {
+    const { materials: resolvedMaterials, subtotal } = await buildMaterialsFromLineItems(
+      bookingData.items
+    );
+    bookingData.materials = resolvedMaterials;
+    const wallet = Math.max(0, Number(bookingData.walletCreditsUsed) || 0);
+    const eliteDiscount = Math.max(0, Number(bookingData.eliteDiscount) || 0);
+    const afterWalletElite = Math.max(0, subtotal - wallet - eliteDiscount);
+    amountBeforeDiscount = afterWalletElite;
+    const submitted = bookingData.payment?.totalAmount;
+    const couponCode = bookingData.couponCode || bookingData.coupon?.code;
+    if (submitted !== undefined && submitted !== null && submitted !== "" && !couponCode) {
+      if (Math.abs(Number(submitted) - afterWalletElite) > 1) {
+        throw new Error(
+          `payment.totalAmount (${submitted}) must match server total ${afterWalletElite} (subtotal ${subtotal}, wallet ${wallet})`
+        );
       }
     }
+    bookingData.payment = {
+      ...(bookingData.payment || {}),
+      totalAmount:
+        couponCode && submitted != null && submitted !== ""
+          ? Math.max(0, Number(submitted))
+          : afterWalletElite,
+    };
+    bookingData.description = resolvedMaterials.map((m) => m.name).join(", ");
+    computedTotal = Number(bookingData.payment.totalAmount) || 0;
+  } else {
+    computedTotal = Number(bookingData.payment?.totalAmount) || 0;
+    amountBeforeDiscount = computedTotal;
+  }
 
-    const hasLineItems =
-      Array.isArray(bookingData.items) && bookingData.items.length > 0;
+  return {
+    hasLineItems,
+    computedTotal,
+    amountBeforeDiscount,
+    description: bookingData.description || "Gardener booking",
+  };
+}
+
+async function addBooking(bookingData) {
+  try {
+    const { hasLineItems, amountBeforeDiscount } = await resolveBookingLineItemsAndTotal(bookingData);
 
     // Required top-level fields (description optional when expanding from items)
     const requiredFields = ["customer", "serviceType", "scheduledDateTime", "location", "payment"];
@@ -124,36 +168,8 @@ async function addBooking(bookingData) {
       throw new Error("location.coordinates.latitude and longitude are required (use 0 if unknown)");
     }
 
-    let computedTotal = 0;
-    if (hasLineItems) {
-      const { materials: resolvedMaterials, subtotal } = await buildMaterialsFromLineItems(
-        bookingData.items
-      );
-      bookingData.materials = resolvedMaterials;
-      const wallet = Math.max(0, Number(bookingData.walletCreditsUsed) || 0);
-      const eliteDiscount = Math.max(0, Number(bookingData.eliteDiscount) || 0);
-      computedTotal = Math.max(0, subtotal - wallet - eliteDiscount);
-      const submitted = bookingData.payment.totalAmount;
-      const couponCode = bookingData.couponCode || bookingData.coupon?.code;
-      if (submitted !== undefined && submitted !== null && submitted !== "" && !couponCode) {
-        if (Math.abs(Number(submitted) - computedTotal) > 1) {
-          throw new Error(
-            `payment.totalAmount (${submitted}) must match server total ${computedTotal} (subtotal ${subtotal}, wallet ${wallet})`
-          );
-        }
-      }
-      bookingData.payment = {
-        ...bookingData.payment,
-        totalAmount: couponCode && submitted != null && submitted !== ""
-          ? Math.max(0, Number(submitted))
-          : computedTotal,
-      };
-      bookingData.description = resolvedMaterials.map((m) => m.name).join(", ");
-    }
-
     const couponCode = bookingData.couponCode || bookingData.coupon?.code;
     const chargedTotal = Number(bookingData.payment?.totalAmount);
-    const amountBeforeDiscount = hasLineItems ? computedTotal : chargedTotal;
     const couponToSave = couponCode
       ? await persistableCouponFromCode({
           code: couponCode,
@@ -211,6 +227,12 @@ async function addBooking(bookingData) {
         status: bookingData.payment.status || "pending",
         prePaidAmount: bookingData.payment.prePaidAmount || 0,
         method: bookingData.payment.method || undefined,
+        ...(bookingData.payment.transactionId
+          ? { transactionId: bookingData.payment.transactionId }
+          : {}),
+        ...(bookingData.payment.paymentDate
+          ? { paymentDate: bookingData.payment.paymentDate }
+          : {}),
       },
       ...(couponToSave ? { coupon: couponToSave } : {}),
       notes: bookingData.notes || undefined,
@@ -1006,6 +1028,7 @@ const initiateOTPForBill = async (phoneNumber) => {
 module.exports = {
   addBooking,
   buildMaterialsFromLineItems,
+  resolveBookingLineItemsAndTotal,
   addBookingFromEmail,
   cancelled,
   completed,

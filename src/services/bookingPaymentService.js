@@ -1,9 +1,17 @@
 const crypto = require('crypto');
-const Booking = require('../models/Booking');
 const Customer = require('../models/Customer');
-const { createRazorpayInstance, getRazorpayKeySecret, getRazorpayKeyId, assertRazorpayConfigured, formatRazorpayError } = require('../config/razorpay');
+const PendingRazorpayCheckout = require('../models/PendingRazorpayCheckout');
+const {
+  createRazorpayInstance,
+  getRazorpayKeySecret,
+  getRazorpayKeyId,
+  assertRazorpayConfigured,
+  formatRazorpayError,
+} = require('../config/razorpay');
 const { markCustomerCouponUsed } = require('./couponService');
 const bookingService = require('./bookingService');
+
+const PENDING_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
 
 function verifyRazorpaySignature({ razorpayOrderId, razorpayPaymentId, razorpaySignature }) {
   const expected = crypto
@@ -50,34 +58,40 @@ function normalizeCreateBookingBody(body, customerId) {
   return { ...rest, customer, location, payment };
 }
 
+/**
+ * UPI/online init: create Razorpay order + store checkout payload only.
+ * Does NOT create a Booking — that happens after payment verification.
+ */
 async function initBookingOnlinePayment(customerId, body) {
-  const bookingData = normalizeCreateBookingBody(body, customerId);
+  const bookingData = normalizeCreateBookingBody(
+    JSON.parse(JSON.stringify(body)),
+    customerId,
+  );
   if (body.couponCode) bookingData.couponCode = body.couponCode;
-  bookingData.status = 'pending';
-  const pay = { ...(bookingData.payment || {}) };
+
+  // Quote server total without persisting a booking.
+  const quoteClone = JSON.parse(JSON.stringify(bookingData));
+  const pay = { ...(quoteClone.payment || {}) };
   delete pay.method;
-  bookingData.payment = {
-    ...pay,
-    status: 'pending',
-    prePaidAmount: 0,
-  };
+  quoteClone.payment = { ...pay, status: 'pending', prePaidAmount: 0 };
+  const { computedTotal, description } =
+    await bookingService.resolveBookingLineItemsAndTotal(quoteClone);
 
-  const booking = await bookingService.addBooking(bookingData);
-
-  assertRazorpayConfigured();
-  const razorpay = createRazorpayInstance();
-  const amountPaise = Math.round(Number(booking.payment.totalAmount) * 100);
+  const amountPaise = Math.round(Number(computedTotal) * 100);
   if (!Number.isFinite(amountPaise) || amountPaise < 100) {
     const err = new Error('Booking total must be at least ₹1 for online payment.');
     err.status = 400;
     throw err;
   }
+
+  assertRazorpayConfigured();
+  const razorpay = createRazorpayInstance();
   let razorpayOrder;
   try {
     razorpayOrder = await razorpay.orders.create({
       amount: amountPaise,
       currency: 'INR',
-      receipt: `mob_booking_${String(booking._id).slice(-12)}`,
+      receipt: `mob_bk_${String(customerId).slice(-8)}_${Date.now().toString(36)}`.slice(0, 40),
     });
   } catch (rzpErr) {
     const err = new Error(formatRazorpayError(rzpErr));
@@ -85,49 +99,89 @@ async function initBookingOnlinePayment(customerId, body) {
     throw err;
   }
 
-  booking.eOrderId = razorpayOrder.id;
-  await booking.save();
+  const couponCode = body.couponCode || body.coupon?.code || null;
+  const payloadForConfirm = JSON.parse(JSON.stringify(body));
+  // Persist charged total so confirm matches Razorpay amount.
+  payloadForConfirm.payment = {
+    ...(payloadForConfirm.payment || {}),
+    totalAmount: computedTotal,
+    prePaidAmount: 0,
+  };
+  if (couponCode) payloadForConfirm.couponCode = couponCode;
+
+  await PendingRazorpayCheckout.create({
+    kind: 'booking',
+    customerId,
+    razorpayOrderId: razorpayOrder.id,
+    amountPaise,
+    currency: 'INR',
+    description: description || 'Gardener booking',
+    couponCode,
+    payload: payloadForConfirm,
+    expiresAt: new Date(Date.now() + PENDING_TTL_MS),
+  });
 
   const customer = await Customer.findById(customerId).select('name phoneNumber emailId');
-  const phone = String(customer?.phoneNumber || booking.customer.phone || '').replace(/\D/g, '').slice(-10);
+  const phone = String(customer?.phoneNumber || '').replace(/\D/g, '').slice(-10);
 
   return {
-    booking,
     razorpayOrder,
     razorpayKeyId: getRazorpayKeyId(),
+    description: description || 'Gardener booking',
     prefill: {
-      name: customer?.name || booking.customer.name,
-      email: customer?.emailId || booking.customer.email || '',
+      name: customer?.name || '',
+      email: customer?.emailId || '',
       contact: phone ? `+91${phone}` : '',
     },
-    couponCode: body.couponCode || body.coupon?.code || null,
+    couponCode,
   };
 }
 
-async function confirmBookingOnlinePayment(customerId, { razorpayOrderId, razorpayPaymentId, razorpaySignature, couponCode }) {
+/**
+ * After Razorpay success: verify signature, then create the Booking as paid/upcoming.
+ */
+async function confirmBookingOnlinePayment(
+  customerId,
+  { razorpayOrderId, razorpayPaymentId, razorpaySignature, couponCode },
+) {
   verifyRazorpaySignature({ razorpayOrderId, razorpayPaymentId, razorpaySignature });
 
-  const booking = await Booking.findOne({
-    eOrderId: razorpayOrderId,
-    'customer.id': customerId,
-    status: 'pending',
+  const pending = await PendingRazorpayCheckout.findOne({
+    razorpayOrderId,
+    customerId,
+    kind: 'booking',
   });
-
-  if (!booking) {
-    const err = new Error('Pending booking not found for this payment');
+  if (!pending) {
+    const err = new Error('Payment session not found or already completed');
     err.status = 404;
     throw err;
   }
 
-  booking.status = 'upcoming';
-  booking.payment.status = 'paid';
-  booking.payment.method = 'online';
-  booking.payment.prePaidAmount = Number(booking.payment.totalAmount) || 0;
-  booking.payment.transactionId = razorpayPaymentId;
-  booking.payment.paymentDate = new Date();
-  await booking.save();
+  const chargedTotal = Math.round(pending.amountPaise) / 100;
+  const bookingData = normalizeCreateBookingBody(
+    JSON.parse(JSON.stringify(pending.payload)),
+    customerId,
+  );
+  if (pending.couponCode || couponCode) {
+    bookingData.couponCode = couponCode || pending.couponCode;
+  }
+  bookingData.status = 'upcoming';
+  bookingData.eOrderId = razorpayOrderId;
+  bookingData.payment = {
+    ...(bookingData.payment || {}),
+    totalAmount: chargedTotal,
+    status: 'paid',
+    method: 'online',
+    prePaidAmount: chargedTotal,
+    transactionId: razorpayPaymentId,
+    paymentDate: new Date(),
+  };
 
-  const code = couponCode || booking.coupon?.code;
+  const booking = await bookingService.addBooking(bookingData);
+
+  await PendingRazorpayCheckout.deleteOne({ _id: pending._id });
+
+  const code = couponCode || pending.couponCode || booking.coupon?.code;
   if (code) {
     await markCustomerCouponUsed({ customerId, couponCode: code });
   }

@@ -1,12 +1,23 @@
 // controllers/web/orderController.js
+// Plant orders on web — Razorpay first; Booking created only after payment verify.
 const CustomerCart = require('../../models/CustomerCart');
 const Booking = require('../../models/Booking');
+const PendingRazorpayCheckout = require('../../models/PendingRazorpayCheckout');
 const { buildMaterialsFromLineItems } = require('../../services/bookingService');
 const { assertStandaloneEliteBody } = require('../../services/eliteService');
 const { COD_MATERIALS_ONLINE_ONLY_MESSAGE } = require('../../constants/checkoutPayment');
 require('../../models/Gardener');
-const { createRazorpayInstance } = require('../../config/razorpay');
+const {
+  createRazorpayInstance,
+  assertRazorpayConfigured,
+  formatRazorpayError,
+  getRazorpayKeyId,
+  getRazorpayKeySecret,
+} = require('../../config/razorpay');
 const { notifyBookingConfirmed } = require('../../services/pushNotificationService');
+const crypto = require('crypto');
+
+const PENDING_TTL_MS = 2 * 60 * 60 * 1000;
 
 const getOrders = async (req, res) => {
   try {
@@ -15,7 +26,6 @@ const getOrders = async (req, res) => {
     if (status) {
       query.status = status;
     } else {
-      // Do not list unpaid UPI drafts that were never paid.
       query.status = { $ne: 'pending' };
     }
 
@@ -27,8 +37,6 @@ const getOrders = async (req, res) => {
       .select('-__v');
 
     const total = await Booking.countDocuments(query);
-
-    // Map booking fields to the order shape the frontend expects
     const orders = bookings.map(bookingToOrder);
     res.json({ success: true, orders, total, page: Number(page), limit: Number(limit) });
   } catch (error) {
@@ -51,7 +59,7 @@ const getOrderById = async (req, res) => {
   }
 };
 
-/** Map a Booking document to the CustomerOrder shape the frontend uses. */
+/** Map a Booking document to the order shape the frontend uses. */
 function bookingToOrder(b) {
   return {
     _id: b._id,
@@ -95,6 +103,7 @@ function bookingToOrder(b) {
   };
 }
 
+/** Razorpay session only — no Booking until confirm-payment. */
 const createOrder = async (req, res) => {
   try {
     assertStandaloneEliteBody(req.body);
@@ -118,94 +127,141 @@ const createOrder = async (req, res) => {
     }
 
     const deliveryFee = subtotal >= 500 ? 0 : 49;
-    const total = subtotal + deliveryFee - walletCreditsUsed;
-
-    // Online payments go through Razorpay; COD skips it
-    let razorpayOrderId = null;
-    let razorpayAmount = null;
-    if (paymentMethod !== 'cod') {
-      const razorpay = createRazorpayInstance();
-      const rzpOrder = await razorpay.orders.create({
-        amount: Math.round(total * 100),
-        currency: 'INR',
-        receipt: `order_${Date.now()}`,
-      });
-      razorpayOrderId = rzpOrder.id;
-      razorpayAmount = rzpOrder.amount;
+    const total = Math.max(0, subtotal + deliveryFee - walletCreditsUsed);
+    if (total < 1) {
+      return res.status(400).json({ success: false, message: 'Order total must be at least ₹1 for online payment.' });
     }
 
-    // Default delivery slot: 2 days from now
-    const deliveryDate = new Date();
-    deliveryDate.setDate(deliveryDate.getDate() + 2);
-    deliveryDate.setHours(0, 0, 0, 0);
+    assertRazorpayConfigured();
+    const razorpay = createRazorpayInstance();
+    let razorpayOrder;
+    try {
+      razorpayOrder = await razorpay.orders.create({
+        amount: Math.round(total * 100),
+        currency: 'INR',
+        receipt: `web_ord_${Date.now()}`,
+      });
+    } catch (rzpErr) {
+      return res.status(503).json({ success: false, message: formatRazorpayError(rzpErr) });
+    }
 
-    const booking = await Booking.create({
-      serviceType: 'gardening',
-      description: `Plant delivery — ${enrichedItems.length} item${enrichedItems.length > 1 ? 's' : ''}`,
-      status: paymentMethod === 'cod' ? 'upcoming' : 'upcoming',
-      customer: {
-        id: req.customerId,
-        name: deliveryAddress.fullName || '',
-        phone: deliveryAddress.phone || '',
-        email: deliveryAddress.email || '',
+    await PendingRazorpayCheckout.create({
+      kind: 'order',
+      customerId: req.customerId,
+      razorpayOrderId: razorpayOrder.id,
+      amountPaise: razorpayOrder.amount,
+      currency: 'INR',
+      description: 'Elanters order',
+      couponCode: couponCode || null,
+      payload: {
+        channel: 'web-booking',
+        enrichedItems,
+        deliveryAddress,
+        paymentMethod,
+        couponCode: couponCode || null,
+        walletCreditsUsed,
+        total,
       },
-      scheduledDateTime: {
-        date: deliveryDate,
-        timeSlot: '9am-12pm',
-      },
-      location: {
-        address: deliveryAddress.line1,
-        city: deliveryAddress.city,
-        state: deliveryAddress.state,
-        postalCode: deliveryAddress.pincode,
-        coordinates: { latitude: 0, longitude: 0 },
-      },
-      materials: enrichedItems,
-      payment: {
-        totalAmount: total,
-        status: 'pending',
-        method: paymentMethod,
-        prePaidAmount: 0,
-      },
-      coupon: {
-        code: couponCode || null,
-        discountAmount: 0,
-      },
-      assignee: { type: 'admin', gardenerRef: null },
-      history: {
-        createdAt: new Date(),
-        lastModifiedAt: new Date(),
-      },
-      ...(razorpayOrderId ? { eOrderId: razorpayOrderId } : {}),
+      expiresAt: new Date(Date.now() + PENDING_TTL_MS),
     });
 
     res.status(201).json({
       success: true,
-      order: bookingToOrder(booking),
-      ...(razorpayOrderId ? {
-        razorpayOrderId,
-        razorpayKeyId: process.env.RAZORPAY_KEY_ID,
-        amount: razorpayAmount,
-      } : {}),
+      needsPayment: true,
+      razorpayOrderId: razorpayOrder.id,
+      razorpayKeyId: getRazorpayKeyId(),
+      amount: razorpayOrder.amount,
+      currency: 'INR',
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// Called after successful Razorpay payment
 const confirmPayment = async (req, res) => {
   try {
     const { razorpayOrderId, razorpayPaymentId, razorpaySignature } = req.body;
-    const crypto = require('crypto');
+    if (!razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
+      return res.status(400).json({
+        success: false,
+        message: 'razorpayOrderId, razorpayPaymentId and razorpaySignature are required',
+      });
+    }
+
     const expected = crypto
-      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+      .createHmac('sha256', getRazorpayKeySecret())
       .update(`${razorpayOrderId}|${razorpayPaymentId}`)
       .digest('hex');
 
-    if (expected !== razorpaySignature)
+    if (expected !== razorpaySignature) {
       return res.status(400).json({ success: false, message: 'Payment verification failed' });
+    }
 
+    const pending = await PendingRazorpayCheckout.findOne({
+      razorpayOrderId,
+      customerId: req.customerId,
+      kind: 'order',
+    });
+
+    if (pending?.payload?.channel === 'web-booking') {
+      const p = pending.payload;
+      const deliveryDate = new Date();
+      deliveryDate.setDate(deliveryDate.getDate() + 2);
+      deliveryDate.setHours(0, 0, 0, 0);
+      const chargedTotal = Math.round(pending.amountPaise) / 100;
+
+      const booking = await Booking.create({
+        serviceType: 'gardening',
+        description: `Plant delivery — ${p.enrichedItems.length} item${p.enrichedItems.length > 1 ? 's' : ''}`,
+        status: 'upcoming',
+        eOrderId: razorpayOrderId,
+        customer: {
+          id: req.customerId,
+          name: p.deliveryAddress.fullName || '',
+          phone: p.deliveryAddress.phone || '',
+          email: p.deliveryAddress.email || '',
+        },
+        scheduledDateTime: {
+          date: deliveryDate,
+          timeSlot: '9am-12pm',
+        },
+        location: {
+          address: p.deliveryAddress.line1,
+          city: p.deliveryAddress.city,
+          state: p.deliveryAddress.state,
+          postalCode: p.deliveryAddress.pincode,
+          coordinates: { latitude: 0, longitude: 0 },
+        },
+        materials: p.enrichedItems,
+        payment: {
+          totalAmount: chargedTotal,
+          status: 'paid',
+          method: 'online',
+          prePaidAmount: chargedTotal,
+          transactionId: razorpayPaymentId,
+          paymentDate: new Date(),
+        },
+        coupon: {
+          code: p.couponCode || null,
+          discountAmount: 0,
+        },
+        assignee: { type: 'admin', gardenerRef: null },
+        history: {
+          createdAt: new Date(),
+          lastModifiedAt: new Date(),
+        },
+      });
+
+      await PendingRazorpayCheckout.deleteOne({ _id: pending._id });
+      await CustomerCart.findOneAndUpdate(
+        { customerId: req.customerId },
+        { $set: { items: [], couponCode: null } },
+      );
+      void notifyBookingConfirmed(req.customerId, booking);
+      return res.json({ success: true, order: bookingToOrder(booking) });
+    }
+
+    // Legacy: booking was created before pay
     const booking = await Booking.findOneAndUpdate(
       { eOrderId: razorpayOrderId, 'customer.id': req.customerId },
       {
@@ -216,19 +272,17 @@ const confirmPayment = async (req, res) => {
           'history.lastModifiedAt': new Date(),
         },
       },
-      { new: true }
+      { new: true },
     );
 
-    if (!booking) return res.status(404).json({ success: false, message: 'Order not found' });
+    if (!booking) return res.status(404).json({ success: false, message: 'Payment session not found' });
 
-    // Clear cart after successful payment
     await CustomerCart.findOneAndUpdate(
       { customerId: req.customerId },
-      { $set: { items: [], couponCode: null } }
+      { $set: { items: [], couponCode: null } },
     );
 
     void notifyBookingConfirmed(req.customerId, booking);
-
     res.json({ success: true, order: bookingToOrder(booking) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
