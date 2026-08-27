@@ -592,10 +592,13 @@ async function updateToCancelled(bookingId, userId, cancellationData = {}) {
       return response;
     }
 
-    // Status validation - Only pending bookings can be cancelled
-    if (booking.status !== "upcoming") {
-      response.message = "Only upcoming bookings can be cancelled";
-      console.log("only upcoming bookings can be cancelled");
+    // Upcoming paid visits, or unpaid UPI drafts (pending), can be cancelled by the customer.
+    const unpaidPending =
+      booking.status === "pending" &&
+      String(booking.payment?.status || "pending") !== "paid";
+    if (booking.status !== "upcoming" && !unpaidPending) {
+      response.message = "Only upcoming or unpaid pending bookings can be cancelled";
+      console.log("only upcoming or unpaid pending bookings can be cancelled");
       return response;
     }
 

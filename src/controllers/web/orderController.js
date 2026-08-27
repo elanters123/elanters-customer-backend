@@ -12,7 +12,12 @@ const getOrders = async (req, res) => {
   try {
     const { page = 1, limit = 10, status } = req.query;
     const query = { 'customer.id': req.customerId, serviceType: 'gardening' };
-    if (status) query.status = status;
+    if (status) {
+      query.status = status;
+    } else {
+      // Do not list unpaid UPI drafts that were never paid.
+      query.status = { $ne: 'pending' };
+    }
 
     const bookings = await Booking.find(query)
       .populate('assignee.gardenerRef', 'name phone')

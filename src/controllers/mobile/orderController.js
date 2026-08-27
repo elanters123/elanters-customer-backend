@@ -19,7 +19,12 @@ const getOrders = async (req, res) => {
   try {
     const { page = 1, limit = 20, status } = req.query;
     const query = { customerId: req.customerId };
-    if (status) query.status = status;
+    if (status) {
+      query.status = status;
+    } else {
+      // Hide unpaid UPI drafts created before Razorpay completes.
+      query.$nor = [{ status: 'pending', paymentStatus: 'pending' }];
+    }
 
     const orders = await CustomerOrder.find(query)
       .sort({ createdAt: -1 })
@@ -148,6 +153,33 @@ const createOrder = async (req, res) => {
   }
 };
 
+/** Cancel an unpaid plant order (e.g. customer abandoned Razorpay/UPI). */
+const cancelOrder = async (req, res) => {
+  try {
+    const order = await CustomerOrder.findOne({
+      _id: req.params.id,
+      customerId: req.customerId,
+    });
+    if (!order) {
+      return res.status(404).json({ success: false, message: 'Order not found' });
+    }
+    if (order.paymentStatus === 'paid') {
+      return res.status(400).json({ success: false, message: 'Paid orders cannot be cancelled here' });
+    }
+    if (order.status === 'cancelled' || order.status === 'refunded') {
+      return res.json({ success: true, order });
+    }
+
+    order.status = 'cancelled';
+    order.paymentStatus = 'failed';
+    await order.save();
+
+    res.json({ success: true, order });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 const confirmPayment = async (req, res) => {
   try {
     const { razorpayOrderId, razorpayPaymentId, razorpaySignature } = req.body;
@@ -192,4 +224,4 @@ const confirmPayment = async (req, res) => {
   }
 };
 
-module.exports = { getOrders, getOrderById, createOrder, confirmPayment };
+module.exports = { getOrders, getOrderById, createOrder, cancelOrder, confirmPayment };
