@@ -106,8 +106,8 @@ const getMyBookings = async (req, res) => {
   try {
     const { status, page = 1, limit = 10 } = req.query;
     const query = { 'customer.id': req.customerId };
+    // Include `pending` — gardener assigned / visit in progress (not a draft).
     if (status) query.status = status;
-    else query.status = { $ne: 'pending' };
 
     const bookings = await Booking.find(query)
       .sort({ 'history.createdAt': -1 })

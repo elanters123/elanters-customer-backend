@@ -23,10 +23,9 @@ const getOrders = async (req, res) => {
   try {
     const { page = 1, limit = 10, status } = req.query;
     const query = { 'customer.id': req.customerId, serviceType: 'gardening' };
+    // Include `pending` — gardener assigned / visit in progress (not a draft).
     if (status) {
       query.status = status;
-    } else {
-      query.status = { $ne: 'pending' };
     }
 
     const bookings = await Booking.find(query)

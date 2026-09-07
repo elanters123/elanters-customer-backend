@@ -174,6 +174,12 @@ async function claimBookingPushReceipt(bookingId, kind) {
   }
 }
 
+async function alreadyNotifiedBooking(bookingId, kind) {
+  if (!bookingId || !kind) return true;
+  const row = await BookingPushReceipt.findOne({ bookingId, kind }).lean();
+  return Boolean(row);
+}
+
 async function claimOrderPushReceipt(orderId, kind) {
   if (!orderId || !kind) return false;
   try {
@@ -185,13 +191,22 @@ async function claimOrderPushReceipt(orderId, kind) {
   }
 }
 
+function pushDelivered(result) {
+  if (!result || result.error) return false;
+  if (!result.sent) return false;
+  const tickets = Array.isArray(result.tickets) ? result.tickets : [];
+  if (!tickets.length) return true;
+  return tickets.some((t) => t?.status === 'ok');
+}
+
 async function notifyBookingEvent(customerId, booking, kind) {
   const tpl = BOOKING_PUSH[kind];
   if (!tpl) return { sent: 0 };
   const id = bookingIdOf(booking);
   try {
-    const claimed = await claimBookingPushReceipt(id, kind);
-    if (!claimed) {
+    // Claim AFTER a successful Expo delivery so a failed admin send cannot
+    // block the change-stream / partner retry from notifying the customer.
+    if (await alreadyNotifiedBooking(id, kind)) {
       console.log(`[push] booking ${id} kind=${kind} already notified — skip`);
       return { sent: 0, skipped: true };
     }
@@ -206,6 +221,14 @@ async function notifyBookingEvent(customerId, booking, kind) {
         type: kind,
       },
     });
+
+    if (pushDelivered(result)) {
+      await claimBookingPushReceipt(id, kind);
+    } else {
+      console.warn(
+        `[push] booking ${id} kind=${kind} not delivered (sent=${result?.sent || 0}) — will retry on next assign/update`,
+      );
+    }
     return result;
   } catch (err) {
     console.warn(`[push] notifyBookingEvent(${kind}) failed:`, err?.message || err);
