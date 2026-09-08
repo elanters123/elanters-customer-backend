@@ -208,12 +208,17 @@ const confirmPayment = async (req, res) => {
       deliveryDate.setDate(deliveryDate.getDate() + 2);
       deliveryDate.setHours(0, 0, 0, 0);
       const chargedTotal = Math.round(pending.amountPaise) / 100;
+      const { resolveEOrderIdForCreate } = require('../../utils/eOrderId');
+      const eOrderId = await resolveEOrderIdForCreate(Booking, {
+        clientPlatform: 'web',
+        channel: 'web',
+      });
 
       const booking = await Booking.create({
         serviceType: 'gardening',
         description: `Plant delivery — ${p.enrichedItems.length} item${p.enrichedItems.length > 1 ? 's' : ''}`,
         status: 'upcoming',
-        eOrderId: razorpayOrderId,
+        eOrderId,
         customer: {
           id: req.customerId,
           name: p.deliveryAddress.fullName || '',

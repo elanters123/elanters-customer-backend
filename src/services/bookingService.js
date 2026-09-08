@@ -13,6 +13,7 @@ const otpRequested = require("../models/otpRequested.js");
 const { expandGardenerBooking } = require("./gardenerBookingExpand.js");
 const { validateBookingImage } = require("../utils/bookingImage.js");
 const { persistableCouponFromCode } = require("./couponService");
+const { resolveEOrderIdForCreate } = require("../utils/eOrderId");
 
 /**
  * Resolve cart lines to booking materials using live Item prices (same rules as web createOrder).
@@ -203,11 +204,18 @@ async function addBooking(bookingData) {
       return row;
     });
 
+    const eOrderId = await resolveEOrderIdForCreate(Booking, {
+      eOrderId: bookingData.eOrderId,
+      clientPlatform: bookingData.clientPlatform,
+      channel: bookingData.channel,
+      source: bookingData.source,
+    });
+
     const newBooking = new Booking({
       serviceType: bookingData.serviceType,
       description: bookingData.description,
       status: bookingData.status || "upcoming",
-      eOrderId: bookingData.eOrderId || undefined,
+      eOrderId,
       customer: { id, name, phone, email },
       scheduledDateTime: { date: new Date(date), timeSlot },
       bookingDate: new Date(),

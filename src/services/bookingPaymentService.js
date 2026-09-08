@@ -166,7 +166,13 @@ async function confirmBookingOnlinePayment(
     bookingData.couponCode = couponCode || pending.couponCode;
   }
   bookingData.status = 'upcoming';
-  bookingData.eOrderId = razorpayOrderId;
+  // Human-readable eOrderId (A/I/W/M + 6 digits). Keep Razorpay id on payment.transactionId path only.
+  delete bookingData.eOrderId;
+  bookingData.clientPlatform =
+    bookingData.clientPlatform ||
+    pending.payload?.clientPlatform ||
+    pending.payload?.channel ||
+    'android';
   bookingData.payment = {
     ...(bookingData.payment || {}),
     totalAmount: chargedTotal,
