@@ -15,6 +15,7 @@ const {
   getRazorpayKeySecret,
 } = require('../../config/razorpay');
 const { notifyBookingConfirmed } = require('../../services/pushNotificationService');
+const { calcPlantOnlyDeliveryFee } = require('../../constants/deliveryFee');
 const crypto = require('crypto');
 
 const PENDING_TTL_MS = 2 * 60 * 60 * 1000;
@@ -22,7 +23,10 @@ const PENDING_TTL_MS = 2 * 60 * 60 * 1000;
 const getOrders = async (req, res) => {
   try {
     const { page = 1, limit = 10, status } = req.query;
-    const query = { 'customer.id': req.customerId, serviceType: 'gardening' };
+    const query = {
+      'customer.id': req.customerId,
+      serviceType: { $in: ['gardening', 'plantation'] },
+    };
     // Include `pending` — gardener assigned / visit in progress (not a draft).
     if (status) {
       query.status = status;
@@ -125,7 +129,7 @@ const createOrder = async (req, res) => {
       return res.status(status).json({ success: false, message: e.message });
     }
 
-    const deliveryFee = subtotal >= 500 ? 0 : 49;
+    const deliveryFee = calcPlantOnlyDeliveryFee(subtotal);
     const total = Math.max(0, subtotal + deliveryFee - walletCreditsUsed);
     if (total < 1) {
       return res.status(400).json({ success: false, message: 'Order total must be at least ₹1 for online payment.' });
@@ -215,7 +219,7 @@ const confirmPayment = async (req, res) => {
       });
 
       const booking = await Booking.create({
-        serviceType: 'gardening',
+        serviceType: 'plantation',
         description: `Plant delivery — ${p.enrichedItems.length} item${p.enrichedItems.length > 1 ? 's' : ''}`,
         status: 'upcoming',
         eOrderId,

@@ -79,12 +79,14 @@ const bookingSchema = new Schema({
 
   // Job details and materials (may be updated after completion)
   materials: [{
-    // id: { type: Types.ObjectId, ref: 'Item' }, // Assuming Item model exists and ID is optional here too for now
-    id: { type: Types.ObjectId, ref: 'Item' },
+    // Catalog Item ref — omitted for one-time (ad-hoc) line items
+    id: { type: Types.ObjectId, ref: 'Item', required: false },
     name: String,
     price: Number,
     quantity: Number,
-    unit: String
+    unit: String,
+    /** True = temporary line for this order only; never a catalog Item */
+    isAdHoc: { type: Boolean, default: false },
   }],
 
   // Payment information (partially filled based on status)

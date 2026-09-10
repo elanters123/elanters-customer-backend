@@ -14,6 +14,11 @@ const { expandGardenerBooking } = require("./gardenerBookingExpand.js");
 const { validateBookingImage } = require("../utils/bookingImage.js");
 const { persistableCouponFromCode } = require("./couponService");
 const { resolveEOrderIdForCreate } = require("../utils/eOrderId");
+const {
+  resolveBookingServiceType,
+  applyPlantDeliveryCharges,
+} = require("../utils/plantDeliveryOrder");
+const { allGardenerProductIds } = require("../config/gardenerSkuMap");
 
 /**
  * Resolve cart lines to booking materials using live Item prices (same rules as web createOrder).
@@ -99,16 +104,21 @@ async function resolveBookingLineItemsAndTotal(bookingData) {
       bookingData.items
     );
     bookingData.materials = resolvedMaterials;
+    const serviceType = resolveBookingServiceType(resolvedMaterials, {
+      gardenerProductIds: allGardenerProductIds(),
+    });
+    bookingData.serviceType = serviceType;
+    const { deliveryFee } = applyPlantDeliveryCharges(subtotal, serviceType);
     const wallet = Math.max(0, Number(bookingData.walletCreditsUsed) || 0);
     const eliteDiscount = Math.max(0, Number(bookingData.eliteDiscount) || 0);
-    const afterWalletElite = Math.max(0, subtotal - wallet - eliteDiscount);
+    const afterWalletElite = Math.max(0, subtotal + deliveryFee - wallet - eliteDiscount);
     amountBeforeDiscount = afterWalletElite;
     const submitted = bookingData.payment?.totalAmount;
     const couponCode = bookingData.couponCode || bookingData.coupon?.code;
     if (submitted !== undefined && submitted !== null && submitted !== "" && !couponCode) {
       if (Math.abs(Number(submitted) - afterWalletElite) > 1) {
         throw new Error(
-          `payment.totalAmount (${submitted}) must match server total ${afterWalletElite} (subtotal ${subtotal}, wallet ${wallet})`
+          `payment.totalAmount (${submitted}) must match server total ${afterWalletElite} (subtotal ${subtotal}, delivery ${deliveryFee}, wallet ${wallet})`
         );
       }
     }
@@ -122,6 +132,12 @@ async function resolveBookingLineItemsAndTotal(bookingData) {
     bookingData.description = resolvedMaterials.map((m) => m.name).join(", ");
     computedTotal = Number(bookingData.payment.totalAmount) || 0;
   } else {
+    // No catalog line expansion — still classify from materials already on the body
+    if (Array.isArray(bookingData.materials) && bookingData.materials.length > 0) {
+      bookingData.serviceType = resolveBookingServiceType(bookingData.materials, {
+        gardenerProductIds: allGardenerProductIds(),
+      });
+    }
     computedTotal = Number(bookingData.payment?.totalAmount) || 0;
     amountBeforeDiscount = computedTotal;
   }

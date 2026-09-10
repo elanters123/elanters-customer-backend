@@ -39,4 +39,14 @@ module.exports = {
   grass10_50,
   grassBands,
   GRASS_AREA_ORDER,
+  /** Flat list of hire-gardener catalog Item ids (for plant-vs-gardener detection). */
+  allGardenerProductIds() {
+    return [
+      ...Object.values(potBand),
+      ...Object.values(repot),
+      ...Object.values(standalone),
+      grass10_50,
+      ...grassBands,
+    ].filter(Boolean);
+  },
 };

@@ -17,6 +17,7 @@ const { buildMaterialsFromLineItems } = require('../../services/bookingService')
 const { assertStandaloneEliteBody } = require('../../services/eliteService');
 const crypto = require('crypto');
 const { notifyOrderConfirmed } = require('../../services/pushNotificationService');
+const { calcPlantOnlyDeliveryFee } = require('../../constants/deliveryFee');
 
 const PENDING_TTL_MS = 2 * 60 * 60 * 1000;
 
@@ -89,7 +90,7 @@ async function quotePlantOrder(reqBody, customerId) {
     throw err;
   }
 
-  const deliveryFee = subtotal >= 500 ? 0 : 49;
+  const deliveryFee = calcPlantOnlyDeliveryFee(subtotal);
   let discount = 0;
   if (couponCode) {
     const coupon = await validateCouponForCheckout({
