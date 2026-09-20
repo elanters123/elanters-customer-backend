@@ -7,6 +7,7 @@
 const jwt = require('jsonwebtoken');
 const Customer = require('../models/Customer');
 const { assertSessionActive } = require('../services/authService');
+const logger = require('../utils/logger');
 require('dotenv').config();
 
 const authMiddleware = async (req, res, next) => {
@@ -18,6 +19,12 @@ const authMiddleware = async (req, res, next) => {
   }
 
   if (!token) {
+    logger.warn('JWT rejected', 'Auth', {
+      method: req.method,
+      path: req.originalUrl || req.url,
+      reason: 'no_token',
+      status: 401,
+    });
     return res.status(401).json({ success: false, message: 'No token provided' });
   }
 
@@ -32,6 +39,13 @@ const authMiddleware = async (req, res, next) => {
       err?.message === 'Session ended'
         ? 'Session ended. Please sign in again.'
         : 'Invalid or expired token';
+    logger.warn('JWT rejected', 'Auth', {
+      method: req.method,
+      path: req.originalUrl || req.url,
+      reason: err?.message === 'Session ended' ? 'session_ended' : 'invalid_or_expired',
+      status: 401,
+      detail: err?.message || String(err),
+    });
     return res.status(401).json({ success: false, message: msg });
   }
 };

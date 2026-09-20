@@ -12,6 +12,8 @@ const {
   confirmBookingOnlinePayment,
 } = require('../../services/bookingPaymentService');
 const { notifyBookingConfirmed } = require('../../services/pushNotificationService');
+const logger = require('../../utils/logger');
+const { getRazorpayKeyId } = require('../../config/razorpay');
 
 function isOnlinePaymentMethod(body) {
   const method = String(body.paymentMethod || body.payment?.method || '').toLowerCase();
@@ -74,8 +76,17 @@ const createBooking = async (req, res) => {
     }
 
     if (isOnlinePaymentMethod(req.body)) {
+      logger.info('Booking payment init', 'Bookings', {
+        customerId: String(req.customerId),
+        razorpayKeyPrefix: (getRazorpayKeyId() || '').slice(0, 12),
+      });
       const { razorpayOrder, razorpayKeyId, prefill, couponCode, description } =
         await initBookingOnlinePayment(req.customerId, req.body);
+      logger.info('Booking Razorpay session created', 'Bookings', {
+        customerId: String(req.customerId),
+        razorpayOrderId: razorpayOrder.id,
+        amountPaise: razorpayOrder.amount,
+      });
       return res.status(201).json({
         success: true,
         needsPayment: true,
@@ -111,6 +122,11 @@ const createBooking = async (req, res) => {
         : error?.statusCode >= 500
           ? 503
           : 400;
+    logger.error('Booking create/payment failed', 'Bookings', {
+      customerId: req.customerId ? String(req.customerId) : null,
+      status,
+      message,
+    });
     res.status(status).json({ success: false, message });
   }
 };
@@ -241,8 +257,17 @@ const getBalconyPhoto = async (req, res) => {
 const initPayment = async (req, res) => {
   try {
     assertStandaloneEliteBody(req.body);
+    logger.info('Booking payment init', 'Bookings', {
+      customerId: String(req.customerId),
+      razorpayKeyPrefix: (getRazorpayKeyId() || '').slice(0, 12),
+    });
     const { razorpayOrder, razorpayKeyId, prefill, couponCode, description } =
       await initBookingOnlinePayment(req.customerId, req.body);
+    logger.info('Booking Razorpay session created', 'Bookings', {
+      customerId: String(req.customerId),
+      razorpayOrderId: razorpayOrder.id,
+      amountPaise: razorpayOrder.amount,
+    });
     res.status(201).json({
       success: true,
       razorpayOrderId: razorpayOrder.id,
@@ -254,6 +279,11 @@ const initPayment = async (req, res) => {
       couponCode,
     });
   } catch (error) {
+    logger.error('Booking payment init failed', 'Bookings', {
+      customerId: req.customerId ? String(req.customerId) : null,
+      status: error.status || 400,
+      message: error.message,
+    });
     res.status(error.status || 400).json({ success: false, message: error.message });
   }
 };
@@ -262,6 +292,9 @@ const confirmPayment = async (req, res) => {
   try {
     const { razorpayOrderId, razorpayPaymentId, razorpaySignature, couponCode } = req.body;
     if (!razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
+      logger.warn('Booking payment confirm missing fields', 'Bookings', {
+        customerId: String(req.customerId),
+      });
       return res.status(400).json({
         success: false,
         message: 'razorpayOrderId, razorpayPaymentId and razorpaySignature are required',
@@ -274,8 +307,19 @@ const confirmPayment = async (req, res) => {
       couponCode,
     });
     void notifyBookingConfirmed(req.customerId, booking);
+    logger.info('Booking payment confirmed', 'Bookings', {
+      customerId: String(req.customerId),
+      bookingId: String(booking._id),
+      razorpayOrderId,
+      razorpayPaymentId,
+    });
     res.json({ success: true, booking });
   } catch (error) {
+    logger.error('Booking payment confirm failed', 'Bookings', {
+      customerId: req.customerId ? String(req.customerId) : null,
+      status: error.status || 400,
+      message: error.message,
+    });
     res.status(error.status || 400).json({ success: false, message: error.message });
   }
 };

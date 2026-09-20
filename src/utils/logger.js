@@ -43,7 +43,8 @@ class Logger {
         if (data !== null && data !== undefined) {
             if (typeof data === 'object') {
                 try {
-                    formattedMessage += ` | ${JSON.stringify(data, null, 2)}`;
+                    // Single-line JSON so PM2 / grep stay readable
+                    formattedMessage += ` | ${JSON.stringify(data)}`;
                 } catch (e) {
                     formattedMessage += ` | ${String(data)}`;
                 }

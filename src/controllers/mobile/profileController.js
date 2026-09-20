@@ -4,6 +4,7 @@
 
 const Customer = require('../../models/Customer');
 const CustomerPushToken = require('../../models/CustomerPushToken');
+const logger = require('../../utils/logger');
 
 const getProfile = async (req, res) => {
   try {
@@ -51,11 +52,14 @@ const registerPushToken = async (req, res) => {
       { customerId: req.customerId, token, platform },
       { upsert: true, new: true }
     );
-    console.log(
-      `[push] registered token customer=${String(req.customerId)} platform=${platform} token=${String(token).slice(0, 28)}…`,
-    );
+    logger.info('Push token registered', 'Push', {
+      customerId: String(req.customerId),
+      platform,
+      tokenPrefix: String(token).slice(0, 28),
+    });
     res.json({ success: true, message: 'Push token registered' });
   } catch (error) {
+    logger.error('Push token register failed', 'Push', { message: error.message });
     res.status(500).json({ success: false, message: error.message });
   }
 };

@@ -10,6 +10,7 @@ const {
 } = require('../config/razorpay');
 const { markCustomerCouponUsed } = require('./couponService');
 const bookingService = require('./bookingService');
+const logger = require('../utils/logger');
 
 const PENDING_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
 
@@ -94,6 +95,13 @@ async function initBookingOnlinePayment(customerId, body) {
       receipt: `mob_bk_${String(customerId).slice(-8)}_${Date.now().toString(36)}`.slice(0, 40),
     });
   } catch (rzpErr) {
+    logger.error('Razorpay orders.create failed', 'Bookings', {
+      customerId: String(customerId),
+      amountPaise,
+      razorpayKeyPrefix: (getRazorpayKeyId() || '').slice(0, 12),
+      razorpayError: formatRazorpayError(rzpErr),
+      raw: rzpErr?.error || rzpErr?.message || rzpErr,
+    });
     const err = new Error(formatRazorpayError(rzpErr));
     err.status = 503;
     throw err;

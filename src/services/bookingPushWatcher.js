@@ -7,6 +7,7 @@ const {
   notifyBookingCompleted,
   notifyBookingCanceled,
 } = require('./pushNotificationService');
+const logger = require('../utils/logger');
 
 function gardenerIdOf(doc) {
   const ref = doc?.assignee?.gardenerRef;
@@ -55,17 +56,23 @@ function startBookingPushWatcher() {
           await notifyBookingCanceled(doc.customer.id, doc);
         }
       } catch (err) {
-        console.warn('[push-watcher] change handler failed:', err?.message || err);
+        logger.warn('Push watcher change handler failed', 'PushWatcher', {
+          message: err?.message || String(err),
+        });
       }
     });
 
     stream.on('error', (err) => {
-      console.warn('[push-watcher] stream error:', err?.message || err);
+      logger.warn('Push watcher stream error', 'PushWatcher', {
+        message: err?.message || String(err),
+      });
     });
 
-    console.log('[push-watcher] listening for booking assign/complete/cancel');
+    logger.info('Listening for booking assign/complete/cancel', 'PushWatcher');
   } catch (err) {
-    console.warn('[push-watcher] failed to start:', err?.message || err);
+    logger.warn('Push watcher failed to start', 'PushWatcher', {
+      message: err?.message || String(err),
+    });
   }
 }
 

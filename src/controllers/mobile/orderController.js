@@ -18,6 +18,7 @@ const { assertStandaloneEliteBody } = require('../../services/eliteService');
 const crypto = require('crypto');
 const { notifyOrderConfirmed } = require('../../services/pushNotificationService');
 const { calcPlantOnlyDeliveryFee } = require('../../constants/deliveryFee');
+const logger = require('../../utils/logger');
 
 const PENDING_TTL_MS = 2 * 60 * 60 * 1000;
 
@@ -135,6 +136,15 @@ const createOrder = async (req, res) => {
     assertStandaloneEliteBody(req.body);
     const quoted = await quotePlantOrder(req.body, req.customerId);
 
+    logger.info('Plant order payment init', 'Orders', {
+      customerId: String(req.customerId),
+      subtotal: quoted.subtotal,
+      deliveryFee: quoted.deliveryFee,
+      total: quoted.total,
+      itemCount: quoted.orderItems?.length || 0,
+      razorpayKeyPrefix: (getRazorpayKeyId() || '').slice(0, 12),
+    });
+
     assertRazorpayConfigured();
     const razorpay = createRazorpayInstance();
     let razorpayOrder;
@@ -145,6 +155,13 @@ const createOrder = async (req, res) => {
         receipt: `mob_ord_${Date.now()}`,
       });
     } catch (rzpErr) {
+      logger.error('Razorpay orders.create failed', 'Orders', {
+        customerId: String(req.customerId),
+        total: quoted.total,
+        razorpayKeyPrefix: (getRazorpayKeyId() || '').slice(0, 12),
+        razorpayError: formatRazorpayError(rzpErr),
+        raw: rzpErr?.error || rzpErr?.message || rzpErr,
+      });
       const err = new Error(formatRazorpayError(rzpErr));
       err.status = 503;
       throw err;
@@ -162,6 +179,12 @@ const createOrder = async (req, res) => {
       expiresAt: new Date(Date.now() + PENDING_TTL_MS),
     });
 
+    logger.info('Plant order Razorpay session created', 'Orders', {
+      customerId: String(req.customerId),
+      razorpayOrderId: razorpayOrder.id,
+      amountPaise: razorpayOrder.amount,
+    });
+
     res.status(201).json({
       success: true,
       razorpayOrderId: razorpayOrder.id,
@@ -172,6 +195,11 @@ const createOrder = async (req, res) => {
   } catch (error) {
     const status = error.status && Number.isFinite(error.status) ? error.status : 500;
     const message = error.message || 'Failed to create order';
+    logger.error('Plant order create failed', 'Orders', {
+      customerId: req.customerId ? String(req.customerId) : null,
+      status,
+      message,
+    });
     res.status(status).json({ success: false, message });
   }
 };
@@ -208,6 +236,12 @@ const confirmPayment = async (req, res) => {
   try {
     const { razorpayOrderId, razorpayPaymentId, razorpaySignature } = req.body;
     if (!razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
+      logger.warn('Plant payment confirm missing fields', 'Orders', {
+        customerId: String(req.customerId),
+        hasOrderId: Boolean(razorpayOrderId),
+        hasPaymentId: Boolean(razorpayPaymentId),
+        hasSignature: Boolean(razorpaySignature),
+      });
       return res.status(400).json({
         success: false,
         message: 'razorpayOrderId, razorpayPaymentId and razorpaySignature are required',
@@ -220,6 +254,11 @@ const confirmPayment = async (req, res) => {
       .digest('hex');
 
     if (expected !== razorpaySignature) {
+      logger.warn('Plant payment signature mismatch', 'Orders', {
+        customerId: String(req.customerId),
+        razorpayOrderId,
+        razorpayPaymentId,
+      });
       return res.status(400).json({ success: false, message: 'Payment verification failed' });
     }
 
@@ -264,6 +303,12 @@ const confirmPayment = async (req, res) => {
       );
 
       void notifyOrderConfirmed(req.customerId, order);
+      logger.info('Plant payment confirmed', 'Orders', {
+        customerId: String(req.customerId),
+        orderId: String(order._id),
+        razorpayOrderId,
+        razorpayPaymentId,
+      });
       return res.json({ success: true, message: 'Payment confirmed', orderId: order._id });
     }
 
@@ -282,6 +327,10 @@ const confirmPayment = async (req, res) => {
     );
 
     if (!order) {
+      logger.warn('Plant payment session not found', 'Orders', {
+        customerId: String(req.customerId),
+        razorpayOrderId,
+      });
       return res.status(404).json({ success: false, message: 'Payment session not found' });
     }
 
@@ -298,8 +347,18 @@ const confirmPayment = async (req, res) => {
     );
 
     void notifyOrderConfirmed(req.customerId, order);
+    logger.info('Plant payment confirmed', 'Orders', {
+      customerId: String(req.customerId),
+      orderId: String(order._id),
+      razorpayOrderId,
+      razorpayPaymentId,
+    });
     res.json({ success: true, message: 'Payment confirmed', orderId: order._id });
   } catch (error) {
+    logger.error('Plant payment confirm failed', 'Orders', {
+      customerId: req.customerId ? String(req.customerId) : null,
+      message: error.message,
+    });
     res.status(500).json({ success: false, message: error.message });
   }
 };
