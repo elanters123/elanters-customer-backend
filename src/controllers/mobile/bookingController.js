@@ -13,7 +13,7 @@ const {
 } = require('../../services/bookingPaymentService');
 const { notifyBookingConfirmed } = require('../../services/pushNotificationService');
 const logger = require('../../utils/logger');
-const { getRazorpayKeyId, getRazorpayCredentialFingerprint } = require('../../config/razorpay');
+const { getRazorpayCredentialFingerprint } = require('../../config/razorpay');
 
 function isOnlinePaymentMethod(body) {
   const method = String(body.paymentMethod || body.payment?.method || '').toLowerCase();
