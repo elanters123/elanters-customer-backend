@@ -7,6 +7,7 @@ const {
   getRazorpayKeyId,
   assertRazorpayConfigured,
   formatRazorpayError,
+  getRazorpayCredentialFingerprint,
 } = require('../config/razorpay');
 const { markCustomerCouponUsed } = require('./couponService');
 const bookingService = require('./bookingService');
@@ -98,7 +99,7 @@ async function initBookingOnlinePayment(customerId, body) {
     logger.error('Razorpay orders.create failed', 'Bookings', {
       customerId: String(customerId),
       amountPaise,
-      razorpayKeyPrefix: (getRazorpayKeyId() || '').slice(0, 12),
+      razorpay: getRazorpayCredentialFingerprint(),
       razorpayError: formatRazorpayError(rzpErr),
       raw: rzpErr?.error || rzpErr?.message || rzpErr,
     });

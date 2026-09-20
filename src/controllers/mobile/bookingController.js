@@ -13,7 +13,7 @@ const {
 } = require('../../services/bookingPaymentService');
 const { notifyBookingConfirmed } = require('../../services/pushNotificationService');
 const logger = require('../../utils/logger');
-const { getRazorpayKeyId } = require('../../config/razorpay');
+const { getRazorpayKeyId, getRazorpayCredentialFingerprint } = require('../../config/razorpay');
 
 function isOnlinePaymentMethod(body) {
   const method = String(body.paymentMethod || body.payment?.method || '').toLowerCase();
@@ -78,7 +78,7 @@ const createBooking = async (req, res) => {
     if (isOnlinePaymentMethod(req.body)) {
       logger.info('Booking payment init', 'Bookings', {
         customerId: String(req.customerId),
-        razorpayKeyPrefix: (getRazorpayKeyId() || '').slice(0, 12),
+        razorpay: getRazorpayCredentialFingerprint(),
       });
       const { razorpayOrder, razorpayKeyId, prefill, couponCode, description } =
         await initBookingOnlinePayment(req.customerId, req.body);
@@ -259,7 +259,7 @@ const initPayment = async (req, res) => {
     assertStandaloneEliteBody(req.body);
     logger.info('Booking payment init', 'Bookings', {
       customerId: String(req.customerId),
-      razorpayKeyPrefix: (getRazorpayKeyId() || '').slice(0, 12),
+      razorpay: getRazorpayCredentialFingerprint(),
     });
     const { razorpayOrder, razorpayKeyId, prefill, couponCode, description } =
       await initBookingOnlinePayment(req.customerId, req.body);

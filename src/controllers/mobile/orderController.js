@@ -11,6 +11,7 @@ const {
   formatRazorpayError,
   getRazorpayKeyId,
   getRazorpayKeySecret,
+  getRazorpayCredentialFingerprint,
 } = require('../../config/razorpay');
 const { markCustomerCouponUsed, validateCouponForCheckout } = require('../../services/couponService');
 const { buildMaterialsFromLineItems } = require('../../services/bookingService');
@@ -142,7 +143,7 @@ const createOrder = async (req, res) => {
       deliveryFee: quoted.deliveryFee,
       total: quoted.total,
       itemCount: quoted.orderItems?.length || 0,
-      razorpayKeyPrefix: (getRazorpayKeyId() || '').slice(0, 12),
+      razorpay: getRazorpayCredentialFingerprint(),
     });
 
     assertRazorpayConfigured();
@@ -158,7 +159,7 @@ const createOrder = async (req, res) => {
       logger.error('Razorpay orders.create failed', 'Orders', {
         customerId: String(req.customerId),
         total: quoted.total,
-        razorpayKeyPrefix: (getRazorpayKeyId() || '').slice(0, 12),
+        razorpay: getRazorpayCredentialFingerprint(),
         razorpayError: formatRazorpayError(rzpErr),
         raw: rzpErr?.error || rzpErr?.message || rzpErr,
       });
