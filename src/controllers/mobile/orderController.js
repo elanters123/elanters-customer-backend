@@ -18,8 +18,18 @@ const { buildMaterialsFromLineItems } = require('../../services/bookingService')
 const { assertStandaloneEliteBody } = require('../../services/eliteService');
 const crypto = require('crypto');
 const { notifyOrderConfirmed } = require('../../services/pushNotificationService');
+const { syncCustomerOrderToPlantationBooking } = require('../../services/customerOrderBookingSync');
 const { calcPlantOnlyDeliveryFee } = require('../../constants/deliveryFee');
 const logger = require('../../utils/logger');
+
+function clientPlatformFromRequest(req) {
+  const fromBody = String(req.body?.clientPlatform || '').toLowerCase();
+  if (fromBody === 'ios' || fromBody === 'android' || fromBody === 'web') return fromBody;
+  const ua = String(req.headers['user-agent'] || '').toLowerCase();
+  if (ua.includes('iphone') || ua.includes('ipad') || ua.includes('ios')) return 'ios';
+  if (ua.includes('android')) return 'android';
+  return 'android';
+}
 
 const PENDING_TTL_MS = 2 * 60 * 60 * 1000;
 
@@ -303,14 +313,29 @@ const confirmPayment = async (req, res) => {
         { $set: { items: [], couponCode: null } },
       );
 
+      // Also write Booking (same collection Admin reads as Order)
+      const booking = await syncCustomerOrderToPlantationBooking({
+        customerId: req.customerId,
+        order,
+        deliveryAddress: p.deliveryAddress,
+        razorpayPaymentId,
+        clientPlatform: clientPlatformFromRequest(req),
+      });
+
       void notifyOrderConfirmed(req.customerId, order);
       logger.info('Plant payment confirmed', 'Orders', {
         customerId: String(req.customerId),
         orderId: String(order._id),
+        bookingId: booking?._id ? String(booking._id) : null,
         razorpayOrderId,
         razorpayPaymentId,
       });
-      return res.json({ success: true, message: 'Payment confirmed', orderId: order._id });
+      return res.json({
+        success: true,
+        message: 'Payment confirmed',
+        orderId: order._id,
+        bookingId: booking?._id || null,
+      });
     }
 
     // Legacy: order was created before pay — mark paid if found.
@@ -347,14 +372,28 @@ const confirmPayment = async (req, res) => {
       { $set: { items: [], couponCode: null } },
     );
 
+    const booking = await syncCustomerOrderToPlantationBooking({
+      customerId: req.customerId,
+      order,
+      deliveryAddress: order.deliveryAddress,
+      razorpayPaymentId,
+      clientPlatform: clientPlatformFromRequest(req),
+    });
+
     void notifyOrderConfirmed(req.customerId, order);
     logger.info('Plant payment confirmed', 'Orders', {
       customerId: String(req.customerId),
       orderId: String(order._id),
+      bookingId: booking?._id ? String(booking._id) : null,
       razorpayOrderId,
       razorpayPaymentId,
     });
-    res.json({ success: true, message: 'Payment confirmed', orderId: order._id });
+    res.json({
+      success: true,
+      message: 'Payment confirmed',
+      orderId: order._id,
+      bookingId: booking?._id || null,
+    });
   } catch (error) {
     logger.error('Plant payment confirm failed', 'Orders', {
       customerId: req.customerId ? String(req.customerId) : null,

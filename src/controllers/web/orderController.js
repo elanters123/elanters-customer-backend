@@ -20,12 +20,17 @@ const crypto = require('crypto');
 
 const PENDING_TTL_MS = 2 * 60 * 60 * 1000;
 
+const { NOTES_PREFIX: MOBILE_PLANT_NOTES_PREFIX } = require('../../services/customerOrderBookingSync');
+
 const getOrders = async (req, res) => {
   try {
     const { page = 1, limit = 10, status } = req.query;
     const query = {
       'customer.id': req.customerId,
       serviceType: { $in: ['gardening', 'plantation'] },
+      // Mirrored mobile plant CustomerOrders stay in Booking for Admin only —
+      // customer app already lists them via /mobile/orders (avoid duplicates).
+      notes: { $not: new RegExp(`^${MOBILE_PLANT_NOTES_PREFIX}`) },
     };
     // Include `pending` — gardener assigned / visit in progress (not a draft).
     if (status) {
