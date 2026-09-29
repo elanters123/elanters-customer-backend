@@ -51,6 +51,8 @@ const connectDB = async () => {
     // Catch gardener assign / complete / cancel even when written by admin panel
     const { startBookingPushWatcher } = require('./src/services/bookingPushWatcher');
     startBookingPushWatcher();
+    const { startCustomerOrderPushWatcher } = require('./src/services/customerOrderPushWatcher');
+    startCustomerOrderPushWatcher();
   } catch (error) {
     logger.error('MongoDB connection failed', 'Database', error);
     process.exit(1);

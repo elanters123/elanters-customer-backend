@@ -41,6 +41,19 @@ function toObjectId(id) {
   return new mongoose.Types.ObjectId(s);
 }
 
+function orderSummary(order) {
+  const itemCount = Array.isArray(order?.items)
+    ? order.items.reduce((n, i) => n + (Number(i.quantity) || 0), 0)
+    : 0;
+  const total =
+    order?.total != null ? `₹${Number(order.total).toLocaleString('en-IN')}` : '';
+  const parts = [];
+  if (itemCount > 0) parts.push(`${itemCount} item${itemCount === 1 ? '' : 's'}`);
+  if (total) parts.push(total);
+  return parts.join(' · ');
+}
+
+/** Gardener Booking pushes */
 const BOOKING_PUSH = {
   confirmed: {
     title: 'Booking confirmed',
@@ -50,6 +63,7 @@ const BOOKING_PUSH = {
         ? `Your gardener visit is confirmed for ${when}.`
         : 'Your gardener visit is confirmed.';
     },
+    type: 'booking_confirmed',
   },
   assigned: {
     title: 'Gardener assigned',
@@ -59,10 +73,12 @@ const BOOKING_PUSH = {
         ? `A gardener has been assigned for your visit on ${when}.`
         : 'A gardener has been assigned to your booking.';
     },
+    type: 'gardener_assigned',
   },
   completed: {
     title: 'Visit completed',
     body: () => 'Your gardener visit is done. Thank you for choosing Elanters.',
+    type: 'visit_completed',
   },
   canceled: {
     title: 'Booking canceled',
@@ -72,7 +88,49 @@ const BOOKING_PUSH = {
         ? `Your gardener visit on ${when} has been canceled.`
         : 'Your gardener visit has been canceled.';
     },
+    type: 'booking_canceled',
   },
+};
+
+/**
+ * Plant CustomerOrder pushes
+ * Confirm → Assigned (shipped) → Completed (delivered) → Canceled
+ */
+const ORDER_PUSH = {
+  confirmed: {
+    title: 'Order Confirmed',
+    body: (order) => {
+      const summary = orderSummary(order);
+      return summary
+        ? `Your order is confirmed (${summary}).`
+        : 'Your order is confirmed. Thank you for shopping with Elanters.';
+    },
+    type: 'order_confirmed',
+  },
+  shipped: {
+    title: 'Your order has been shipped',
+    body: () => 'Your plant order is on the way.',
+    type: 'order_shipped',
+  },
+  completed: {
+    title: 'Order Delivered',
+    body: () => 'Your order has been delivered. Thank you for choosing Elanters.',
+    type: 'order_completed',
+  },
+  canceled: {
+    title: 'Order Canceled',
+    body: () => 'Your plant order has been canceled.',
+    type: 'order_canceled',
+  },
+};
+
+/** Map CustomerOrder.status → push kind (only the 4 customer-facing stages) */
+const ORDER_STATUS_TO_PUSH_KIND = {
+  confirmed: 'confirmed',
+  shipped: 'shipped',
+  delivered: 'completed',
+  cancelled: 'canceled',
+  canceled: 'canceled',
 };
 
 /**
@@ -169,7 +227,7 @@ async function claimBookingPushReceipt(bookingId, kind) {
     await BookingPushReceipt.create({ bookingId, kind });
     return true;
   } catch (err) {
-    if (err?.code === 11000) return false; // already sent
+    if (err?.code === 11000) return false;
     throw err;
   }
 }
@@ -191,6 +249,12 @@ async function claimOrderPushReceipt(orderId, kind) {
   }
 }
 
+async function alreadyNotifiedOrder(orderId, kind) {
+  if (!orderId || !kind) return true;
+  const row = await OrderPushReceipt.findOne({ orderId, kind }).lean();
+  return Boolean(row);
+}
+
 function pushDelivered(result) {
   if (!result || result.error) return false;
   if (!result.sent) return false;
@@ -204,8 +268,6 @@ async function notifyBookingEvent(customerId, booking, kind) {
   if (!tpl) return { sent: 0 };
   const id = bookingIdOf(booking);
   try {
-    // Claim AFTER a successful Expo delivery so a failed admin send cannot
-    // block the change-stream / partner retry from notifying the customer.
     if (await alreadyNotifiedBooking(id, kind)) {
       console.log(`[push] booking ${id} kind=${kind} already notified — skip`);
       return { sent: 0, skipped: true };
@@ -218,7 +280,8 @@ async function notifyBookingEvent(customerId, booking, kind) {
         screen: 'booking',
         bookingId: id,
         id,
-        type: kind,
+        type: tpl.type || kind,
+        kind,
       },
     });
 
@@ -253,49 +316,56 @@ async function notifyBookingCanceled(customerId, booking) {
 }
 
 /**
- * Catalog / plant order paid & confirmed.
+ * Plant order lifecycle push.
  * @param {string|import('mongoose').Types.ObjectId} customerId
  * @param {object} order
+ * @param {keyof typeof ORDER_PUSH} kind
  */
-async function notifyOrderConfirmed(customerId, order) {
+async function notifyOrderEvent(customerId, order, kind) {
+  const tpl = ORDER_PUSH[kind];
+  if (!tpl) return { sent: 0 };
   const id = orderIdOf(order);
   const cid = customerId || order?.customerId;
   try {
-    const claimed = await claimOrderPushReceipt(id, 'confirmed');
-    if (!claimed) {
-      console.log(`[push] order ${id} confirmed already notified — skip`);
+    if (await alreadyNotifiedOrder(id, kind)) {
+      console.log(`[push] order ${id} kind=${kind} already notified — skip`);
       return { sent: 0, skipped: true };
     }
 
-    const itemCount = Array.isArray(order?.items)
-      ? order.items.reduce((n, i) => n + (Number(i.quantity) || 0), 0)
-      : 0;
-    const total =
-      order?.total != null
-        ? `₹${Number(order.total).toLocaleString('en-IN')}`
-        : '';
-
-    const bodyParts = [];
-    if (itemCount > 0) bodyParts.push(`${itemCount} item${itemCount === 1 ? '' : 's'}`);
-    if (total) bodyParts.push(total);
-    const body = bodyParts.length
-      ? `Your order is confirmed (${bodyParts.join(' · ')}).`
-      : 'Your order is confirmed. Thank you for shopping with Elanters.';
-
-    return await sendPushToCustomer(cid, {
-      title: 'Order confirmed',
-      body,
+    const result = await sendPushToCustomer(cid, {
+      title: tpl.title,
+      body: tpl.body(order),
       data: {
         screen: 'order',
         orderId: id,
         id,
-        type: 'order_confirmed',
+        type: tpl.type || `order_${kind}`,
+        kind,
       },
     });
+
+    if (pushDelivered(result)) {
+      await claimOrderPushReceipt(id, kind);
+    } else {
+      console.warn(
+        `[push] order ${id} kind=${kind} not delivered (sent=${result?.sent || 0}) — will retry on next status update`,
+      );
+    }
+    return result;
   } catch (err) {
-    console.warn('[push] notifyOrderConfirmed failed:', err?.message || err);
+    console.warn(`[push] notifyOrderEvent(${kind}) failed:`, err?.message || err);
     return { sent: 0, error: err?.message || String(err) };
   }
+}
+
+async function notifyOrderConfirmed(customerId, order) {
+  return notifyOrderEvent(customerId, order, 'confirmed');
+}
+
+async function notifyOrderStatus(customerId, order, status) {
+  const kind = ORDER_STATUS_TO_PUSH_KIND[String(status || '').toLowerCase()];
+  if (!kind) return { sent: 0, skipped: true };
+  return notifyOrderEvent(customerId, order, kind);
 }
 
 module.exports = {
@@ -306,4 +376,9 @@ module.exports = {
   notifyBookingCompleted,
   notifyBookingCanceled,
   notifyOrderConfirmed,
+  notifyOrderEvent,
+  notifyOrderStatus,
+  ORDER_STATUS_TO_PUSH_KIND,
+  ORDER_PUSH,
+  BOOKING_PUSH,
 };

@@ -1,6 +1,13 @@
-// Dedupes order push events (payment confirm may be retried).
+// Dedupes plant-order push events per order + kind.
 const mongoose = require('mongoose');
 const { Types } = mongoose;
+
+const ORDER_PUSH_KINDS = [
+  'confirmed',
+  'shipped',
+  'completed',
+  'canceled',
+];
 
 const orderPushReceiptSchema = new mongoose.Schema(
   {
@@ -8,7 +15,7 @@ const orderPushReceiptSchema = new mongoose.Schema(
     kind: {
       type: String,
       required: true,
-      enum: ['confirmed'],
+      enum: ORDER_PUSH_KINDS,
     },
   },
   { timestamps: true }
@@ -16,4 +23,7 @@ const orderPushReceiptSchema = new mongoose.Schema(
 
 orderPushReceiptSchema.index({ orderId: 1, kind: 1 }, { unique: true });
 
-module.exports = mongoose.model('OrderPushReceipt', orderPushReceiptSchema);
+const OrderPushReceipt = mongoose.model('OrderPushReceipt', orderPushReceiptSchema);
+
+module.exports = OrderPushReceipt;
+module.exports.ORDER_PUSH_KINDS = ORDER_PUSH_KINDS;

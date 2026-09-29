@@ -242,6 +242,57 @@ const cancelOrder = async (req, res) => {
   }
 };
 
+const FULFILLMENT_STATUSES = [
+  'processing',
+  'packed',
+  'shipped',
+  'out_for_delivery',
+  'delivered',
+  'cancelled',
+];
+
+/**
+ * Ops/Admin fulfillment status update for plant CustomerOrders.
+ * Requires header x-ops-key matching OPS_ORDER_STATUS_KEY.
+ * CustomerOrder status change triggers Expo push via customerOrderPushWatcher.
+ */
+const updateFulfillmentStatus = async (req, res) => {
+  try {
+    const opsKey = process.env.OPS_ORDER_STATUS_KEY;
+    if (!opsKey || String(req.headers['x-ops-key'] || '') !== opsKey) {
+      return res.status(403).json({ success: false, message: 'Forbidden' });
+    }
+
+    const nextStatus = String(req.body?.status || '').toLowerCase();
+    if (!FULFILLMENT_STATUSES.includes(nextStatus)) {
+      return res.status(400).json({
+        success: false,
+        message: `status must be one of: ${FULFILLMENT_STATUSES.join(', ')}`,
+      });
+    }
+
+    const order = await CustomerOrder.findById(req.params.id);
+    if (!order) {
+      return res.status(404).json({ success: false, message: 'Order not found' });
+    }
+    if (order.paymentStatus !== 'paid' && nextStatus !== 'cancelled') {
+      return res.status(400).json({ success: false, message: 'Only paid orders can be fulfilled' });
+    }
+
+    order.status = nextStatus;
+    await order.save();
+
+    logger.info('Plant order fulfillment status updated', 'Orders', {
+      orderId: String(order._id),
+      status: nextStatus,
+    });
+
+    res.json({ success: true, order });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 /** Verify Razorpay, then create the CustomerOrder as paid/confirmed. */
 const confirmPayment = async (req, res) => {
   try {
@@ -403,4 +454,11 @@ const confirmPayment = async (req, res) => {
   }
 };
 
-module.exports = { getOrders, getOrderById, createOrder, cancelOrder, confirmPayment };
+module.exports = {
+  getOrders,
+  getOrderById,
+  createOrder,
+  cancelOrder,
+  confirmPayment,
+  updateFulfillmentStatus,
+};

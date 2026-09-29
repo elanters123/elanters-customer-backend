@@ -44,7 +44,17 @@ const customerOrderSchema = new Schema({
   razorpaySignature: { type: String, default: null },
   status: {
     type: String,
-    enum: ['pending', 'confirmed', 'packed', 'out_for_delivery', 'delivered', 'cancelled', 'refunded'],
+    enum: [
+      'pending',
+      'confirmed',
+      'processing',
+      'packed',
+      'shipped',
+      'out_for_delivery',
+      'delivered',
+      'cancelled',
+      'refunded',
+    ],
     default: 'pending',
   },
 }, { timestamps: true });
