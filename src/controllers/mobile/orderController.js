@@ -19,7 +19,7 @@ const { assertStandaloneEliteBody } = require('../../services/eliteService');
 const crypto = require('crypto');
 const { notifyOrderConfirmed } = require('../../services/pushNotificationService');
 const { syncCustomerOrderToPlantationBooking } = require('../../services/customerOrderBookingSync');
-const { calcPlantOnlyDeliveryFee } = require('../../constants/deliveryFee');
+const { calcPlantOnlyDeliveryFee, assertMinPlantOrderSubtotal } = require('../../constants/deliveryFee');
 const logger = require('../../utils/logger');
 
 function clientPlatformFromRequest(req) {
@@ -103,6 +103,7 @@ async function quotePlantOrder(reqBody, customerId) {
   }
 
   const deliveryFee = calcPlantOnlyDeliveryFee(subtotal);
+  assertMinPlantOrderSubtotal(subtotal);
   let discount = 0;
   if (couponCode) {
     const coupon = await validateCouponForCheckout({

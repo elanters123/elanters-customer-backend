@@ -15,7 +15,7 @@ const {
   getRazorpayKeySecret,
 } = require('../../config/razorpay');
 const { notifyBookingConfirmed } = require('../../services/pushNotificationService');
-const { calcPlantOnlyDeliveryFee } = require('../../constants/deliveryFee');
+const { calcPlantOnlyDeliveryFee, assertMinPlantOrderSubtotal } = require('../../constants/deliveryFee');
 const crypto = require('crypto');
 
 const PENDING_TTL_MS = 2 * 60 * 60 * 1000;
@@ -135,6 +135,7 @@ const createOrder = async (req, res) => {
     }
 
     const deliveryFee = calcPlantOnlyDeliveryFee(subtotal);
+    assertMinPlantOrderSubtotal(subtotal);
     const total = Math.max(0, subtotal + deliveryFee - walletCreditsUsed);
     if (total < 1) {
       return res.status(400).json({ success: false, message: 'Order total must be at least ₹1 for online payment.' });

@@ -3,7 +3,9 @@
 const {
   DELIVERY_FEE,
   FREE_DELIVERY_THRESHOLD,
+  MIN_PLANT_ORDER_SUBTOTAL,
   calcPlantOnlyDeliveryFee,
+  assertMinPlantOrderSubtotal,
 } = require('../constants/deliveryFee');
 
 const GARDENER_LINE_RE =
@@ -52,9 +54,11 @@ function applyPlantDeliveryCharges(merchandiseSubtotal, serviceType) {
 module.exports = {
   DELIVERY_FEE,
   FREE_DELIVERY_THRESHOLD,
+  MIN_PLANT_ORDER_SUBTOTAL,
   GARDENER_LINE_RE,
   materialsIncludeGardener,
   resolveBookingServiceType,
   applyPlantDeliveryCharges,
   calcPlantOnlyDeliveryFee,
+  assertMinPlantOrderSubtotal,
 };
