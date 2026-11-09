@@ -13,7 +13,7 @@ const { applyReferralCodeAtSignup } = require('./referralService');
 const normalizePhone = (phone) => String(phone || '').replace(/\D/g, '').slice(-10);
 
 /**
- * Google Play review login: fixed OTP for allowlisted phones only.
+ * App Store / Play review login: fixed OTP for allowlisted phones only.
  * Env (optional):
  *   PLAY_REVIEW_PHONES=7065432173,9999999999
  *   PLAY_REVIEW_OTP=123456
@@ -78,8 +78,8 @@ const initiateCustomerOTP = async (phone) => {
     await sendSMSOTP(normalized, otp);
   } else {
     console.log(
-      `[CustomerAuth ${reviewPhone ? 'PLAY_REVIEW' : 'DEV'}] OTP for ${normalized}: ${otp}` +
-        (reviewPhone ? ' (SMS skipped — Google Play review account)' : ' (SMS not sent — set OTP_SEND_SMS=true to send)'),
+      `[CustomerAuth ${reviewPhone ? 'STORE_REVIEW' : 'DEV'}] OTP for ${normalized}: ${otp}` +
+        (reviewPhone ? ' (SMS skipped — App Store / Play review account)' : ' (SMS not sent — set OTP_SEND_SMS=true to send)'),
     );
   }
   return {
@@ -151,6 +151,9 @@ const signRefreshToken = (customer) =>
 const assertSessionActive = (customer, decoded) => {
   if (!customer) throw new Error('Customer not found');
   if (customer.accountStatus === 'blocked') throw new Error('Account is blocked');
+  if (customer.accountStatus === 'inactive' || customer.isActive === false) {
+    throw new Error('Account deleted');
+  }
   const tokenVersion = decoded.sessionVersion ?? 0;
   if (tokenVersion !== sessionVersionOf(customer)) {
     throw new Error('Session ended');
@@ -180,11 +183,69 @@ const logoutCustomer = async (customerId, { fcmToken } = {}) => {
   return { success: true };
 };
 
+/**
+ * Apple Guideline 5.1.1(v) — in-app account deletion.
+ * Anonymizes PII, deactivates the account, invalidates sessions, frees the phone for re-signup.
+ * Order/booking records may remain for legal/accounting retention without personal profile data.
+ */
+const deleteCustomerAccount = async (customerId) => {
+  const id = customerId?.toString();
+  if (!id) throw new Error('Customer id is required');
+
+  const customer = await Customer.findById(id);
+  if (!customer) throw new Error('Customer not found');
+  if (customer.accountStatus === 'inactive' || customer.isActive === false) {
+    return { success: true, alreadyDeleted: true };
+  }
+
+  const priorPhone = normalizePhone(customer.phoneNumber);
+
+  // Use update (not save) so pre-save does not regenerate referralCode / phone.
+  await Customer.findByIdAndUpdate(id, {
+    $set: {
+      phoneNumber: `deleted_${id}`,
+      name: '',
+      emailId: '',
+      profilePhoto: '',
+      address: '',
+      city: '',
+      state: '',
+      pincode: '',
+      addresses: [],
+      coordinates: { latitude: null, longitude: null },
+      walletBalance: 0,
+      referralCode: `DEL${id.slice(-8).toUpperCase()}`,
+      referredBy: null,
+      referredAt: null,
+      referralRewardGrantedAt: null,
+      eliteMemberId: null,
+      eliteMemberSince: null,
+      eliteMemberExpiresAt: null,
+      eliteCouponCode: null,
+      isActive: false,
+      accountStatus: 'inactive',
+      sessionVersion: sessionVersionOf(customer) + 1,
+      modifyOn: Date.now(),
+    },
+    $unset: { firebaseUID: 1 },
+  });
+
+  await CustomerPushToken.deleteMany({ customerId: id });
+  if (priorPhone) {
+    await CustomerOTP.deleteMany({
+      phone: { $in: [priorPhone, `91${priorPhone}`, `+91${priorPhone}`] },
+    });
+  }
+
+  return { success: true };
+};
+
 module.exports = {
   initiateCustomerOTP,
   verifyCustomerOTP,
   refreshCustomerToken,
   logoutCustomer,
+  deleteCustomerAccount,
   assertSessionActive,
   signToken,
 };

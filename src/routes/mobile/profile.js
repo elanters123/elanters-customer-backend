@@ -2,12 +2,13 @@ const router = require('express').Router();
 const auth = require('../../middleware/auth');
 const {
   getProfile, updateProfile, registerPushToken,
-  getAddresses, addAddress, deleteAddress,
+  getAddresses, addAddress, deleteAddress, deleteAccount,
 } = require('../../controllers/mobile/profileController');
 const { getActiveCoupons } = require('../../controllers/mobile/couponController');
 
 router.get('/', auth, getProfile);
 router.patch('/', auth, updateProfile);
+router.delete('/', auth, deleteAccount);
 router.get('/coupons/active', auth, getActiveCoupons);
 router.post('/push-token', auth, registerPushToken);
 router.get('/addresses', auth, getAddresses);

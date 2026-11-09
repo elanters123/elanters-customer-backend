@@ -30,7 +30,9 @@ const authMiddleware = async (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, process.env.CUSTOMER_JWT_SECRET);
-    const customer = await Customer.findById(decoded.customerId).select('sessionVersion accountStatus');
+    const customer = await Customer.findById(decoded.customerId).select(
+      'sessionVersion accountStatus isActive',
+    );
     assertSessionActive(customer, decoded);
     req.customerId = decoded.customerId;
     next();

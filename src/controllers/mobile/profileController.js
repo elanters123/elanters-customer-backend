@@ -4,6 +4,7 @@
 
 const Customer = require('../../models/Customer');
 const CustomerPushToken = require('../../models/CustomerPushToken');
+const authService = require('../../services/authService');
 const logger = require('../../utils/logger');
 
 const getProfile = async (req, res) => {
@@ -136,4 +137,26 @@ const deleteAddress = async (req, res) => {
   }
 };
 
-module.exports = { getProfile, updateProfile, registerPushToken, getAddresses, addAddress, deleteAddress };
+/** DELETE /api/mobile/profile — permanently delete (anonymize) the signed-in customer account. */
+const deleteAccount = async (req, res) => {
+  try {
+    await authService.deleteCustomerAccount(req.customerId);
+    res.json({
+      success: true,
+      message: 'Account deleted. Personal data has been removed from your profile.',
+    });
+  } catch (error) {
+    const status = error.message === 'Customer not found' ? 404 : 500;
+    res.status(status).json({ success: false, message: error.message });
+  }
+};
+
+module.exports = {
+  getProfile,
+  updateProfile,
+  registerPushToken,
+  getAddresses,
+  addAddress,
+  deleteAddress,
+  deleteAccount,
+};
