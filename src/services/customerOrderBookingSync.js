@@ -1,7 +1,10 @@
 // Mirror mobile plant CustomerOrder into Booking so Admin (Order = Booking) can see it.
+// Also copies Booking.eOrderId onto CustomerOrder so customer app shows the same display id.
 const Booking = require('../models/Booking');
 const Customer = require('../models/Customer');
+const CustomerOrder = require('../models/CustomerOrder');
 const { resolveEOrderIdForCreate } = require('../utils/eOrderId');
+const { notifyAdminNewOrder } = require('./adminOrderEmailService');
 const logger = require('../utils/logger');
 
 const NOTES_PREFIX = 'mobile-plant-order:';
@@ -19,6 +22,54 @@ function materialsFromOrderItems(items = []) {
     unit: 'pcs',
     isAdHoc: false,
   }));
+}
+
+/** Persist Admin Booking eOrderId onto the plant CustomerOrder (same id in both apps). */
+async function writeEOrderIdToCustomerOrder(customerOrderId, eOrderId) {
+  const code = String(eOrderId || '').trim();
+  if (!customerOrderId || !code || /^elanters$/i.test(code)) return;
+  try {
+    await CustomerOrder.updateOne(
+      { _id: customerOrderId },
+      { $set: { eOrderId: code } },
+    );
+  } catch (err) {
+    logger.warn('Failed writing eOrderId onto CustomerOrder', 'Orders', {
+      customerOrderId: String(customerOrderId),
+      eOrderId: code,
+      message: err?.message || String(err),
+    });
+  }
+}
+
+/**
+ * If CustomerOrder has no eOrderId yet, copy it from the linked plantation Booking.
+ * Used on read so older plant orders also show A###### in the customer app.
+ */
+async function ensureCustomerOrderEOrderId(orderDoc) {
+  if (!orderDoc?._id) return orderDoc;
+  const existing = String(orderDoc.eOrderId || '').trim();
+  if (existing && !/^elanters$/i.test(existing)) return orderDoc;
+
+  const booking = await Booking.findOne({ notes: mobilePlantNotes(orderDoc._id) })
+    .select('eOrderId')
+    .lean();
+  const code = String(booking?.eOrderId || '').trim();
+  if (!code || /^elanters$/i.test(code)) return orderDoc;
+
+  await writeEOrderIdToCustomerOrder(orderDoc._id, code);
+  if (typeof orderDoc.set === 'function') {
+    orderDoc.set('eOrderId', code);
+  } else {
+    orderDoc.eOrderId = code;
+  }
+  return orderDoc;
+}
+
+async function ensureCustomerOrdersEOrderIds(orders = []) {
+  const list = Array.isArray(orders) ? orders : [];
+  await Promise.all(list.map((o) => ensureCustomerOrderEOrderId(o)));
+  return list;
 }
 
 /**
@@ -47,9 +98,11 @@ async function syncCustomerOrderToPlantationBooking({
     .lean();
 
   if (existing) {
+    await writeEOrderIdToCustomerOrder(order._id, existing.eOrderId);
     logger.info('Plant Booking already synced', 'Orders', {
       customerOrderId: String(order._id),
       bookingId: String(existing._id),
+      eOrderId: existing.eOrderId,
     });
     return existing;
   }
@@ -133,6 +186,11 @@ async function syncCustomerOrderToPlantationBooking({
       },
     });
 
+    await writeEOrderIdToCustomerOrder(order._id, booking.eOrderId);
+
+    // Fire-and-forget: never block or fail order creation if email/SMTP fails.
+    void Promise.resolve(notifyAdminNewOrder(booking)).catch(() => {});
+
     logger.info('Plant CustomerOrder synced to Booking', 'Orders', {
       customerOrderId: String(order._id),
       bookingId: String(booking._id),
@@ -158,4 +216,7 @@ module.exports = {
   mobilePlantNotes,
   syncCustomerOrderToPlantationBooking,
   isMobilePlantOrderBooking,
+  writeEOrderIdToCustomerOrder,
+  ensureCustomerOrderEOrderId,
+  ensureCustomerOrdersEOrderIds,
 };

@@ -15,6 +15,7 @@ const {
   getRazorpayKeySecret,
 } = require('../../config/razorpay');
 const { notifyBookingConfirmed } = require('../../services/pushNotificationService');
+const { notifyAdminNewOrder } = require('../../services/adminOrderEmailService');
 const { calcPlantOnlyDeliveryFee, assertMinPlantOrderSubtotal } = require('../../constants/deliveryFee');
 const crypto = require('crypto');
 
@@ -272,6 +273,8 @@ const confirmPayment = async (req, res) => {
         { $set: { items: [], couponCode: null } },
       );
       void notifyBookingConfirmed(req.customerId, booking);
+      // Fire-and-forget: never block or fail payment confirm if email/SMTP fails.
+      void Promise.resolve(notifyAdminNewOrder(booking)).catch(() => {});
       return res.json({ success: true, order: bookingToOrder(booking) });
     }
 

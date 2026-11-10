@@ -19,6 +19,7 @@ const {
   applyPlantDeliveryCharges,
 } = require("../utils/plantDeliveryOrder");
 const { allGardenerProductIds } = require("../config/gardenerSkuMap");
+const { notifyAdminNewOrder } = require("./adminOrderEmailService");
 
 /**
  * Resolve cart lines to booking materials using live Item prices (same rules as web createOrder).
@@ -268,6 +269,8 @@ async function addBooking(bookingData) {
     });
 
     const savedBooking = await newBooking.save();
+    // Fire-and-forget: never block or fail order creation if email/SMTP fails.
+    void Promise.resolve(notifyAdminNewOrder(savedBooking)).catch(() => {});
     return savedBooking;
   } catch (error) {
     throw new Error(`Failed to add booking: ${error.message}`);
